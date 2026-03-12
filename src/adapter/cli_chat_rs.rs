@@ -237,4 +237,19 @@ impl MessagingAdapter for JulesAdapter {
     async fn search(&self, _query: &str) -> AdapterResult<Vec<Chat>> {
         Ok(vec![])
     }
+
+    fn requires_setup(&self) -> bool {
+        let inner = match self.inner.try_lock() {
+            Ok(i) => i,
+            Err(_) => return false,
+        };
+        inner.client.api_key().is_empty()
+    }
+
+    async fn setup(&mut self, data: &str) -> AdapterResult<()> {
+        let mut inner = self.inner.lock().await;
+        crate::config::set_api_key(data).map_err(|e| e.to_string())?;
+        inner.client = crate::api::JulesClient::new(data);
+        Ok(())
+    }
 }

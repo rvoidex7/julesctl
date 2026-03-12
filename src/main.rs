@@ -103,12 +103,8 @@ async fn main() -> Result<()> {
     let cfg = match config::load() {
         Ok(c) => c,
         Err(e) => {
-            if matches!(cli.command, Some(Commands::Init)) || cli.command.is_none() {
-                // For init or default TUI, we might handle missing config differently
-                if cli.command.is_none() {
-                    eprintln!("{} Config not found. Run {} to set up your API key.", "!" .yellow(), "julesctl init".cyan());
-                    std::process::exit(1);
-                }
+            if cli.command.is_none() || matches!(cli.command, Some(Commands::Init) | Some(Commands::Tui { .. })) {
+                // For init or default TUI, allow starting with empty config
                 config::Config::default() 
             } else {
                 eprintln!("{} {}", "✗ Config error:".red().bold(), e);

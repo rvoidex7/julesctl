@@ -38,4 +38,8 @@ impl JulesClient {
             s => bail!("[{op}] Unexpected HTTP {s}"),
         }
     }
+
+    pub fn api_key(&self) -> &str {
+        &self.api_key
+    }
 }
