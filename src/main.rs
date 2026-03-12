@@ -24,7 +24,7 @@ use std::path::PathBuf;
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -100,44 +100,45 @@ enum SessionCommands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Init doesn't need config
-    if let Commands::Init = &cli.command {
-        return config::init();
-    }
-
     let cfg = match config::load() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("{} {}", "✗ Config error:".red().bold(), e);
-            eprintln!("  Run {} to create a starter config.", "julesctl init".cyan());
-            std::process::exit(1);
+            if matches!(cli.command, Some(Commands::Init)) || cli.command.is_none() {
+                // For init or default TUI, we might handle missing config differently
+                if cli.command.is_none() {
+                    eprintln!("{} Config not found. Run {} to set up your API key.", "!" .yellow(), "julesctl init".cyan());
+                    std::process::exit(1);
+                }
+                config::Config::default() 
+            } else {
+                eprintln!("{} {}", "✗ Config error:".red().bold(), e);
+                eprintln!("  Run {} to create a starter config.", "julesctl init".cyan());
+                std::process::exit(1);
+            }
         }
     };
 
+    let command = cli.command.unwrap_or(Commands::Tui { session: None });
+
+    // Init doesn't need repo check
+    if let Commands::Init = &command {
+        return config::init();
+    }
+
     let cwd = std::env::current_dir()?;
-    let repo = match cfg.find_repo(&cwd) {
-        Some(r) => r,
-        None => {
-            eprintln!(
-                "{} No julesctl repo entry found for {}",
-                "✗".red().bold(),
-                cwd.display()
-            );
-            eprintln!("  Add a [[repos]] entry to ~/.config/julesctl/config.toml");
-            std::process::exit(1);
-        }
-    };
+    let repo = cfg.find_repo(&cwd).cloned();
 
     let client = api::JulesClient::new(&cfg.api_key);
 
-    match cli.command {
+    match command {
         Commands::Watch { interval, messages } => {
+            let repo = repo.ok_or_else(|| anyhow::anyhow!("No repo config found for this directory."))?;
             match repo.mode {
                 RepoMode::Single => {
-                    modes::single::run_single(client, repo, interval, messages).await?;
+                    modes::single::run_single(client, &repo, interval, messages).await?;
                 }
                 RepoMode::Manual => {
-                    modes::manual::run_manual(client, repo, interval).await?;
+                    modes::manual::run_manual(client, &repo, interval).await?;
                 }
                 RepoMode::Orchestrated => {
                     eprintln!(
@@ -150,12 +151,13 @@ async fn main() -> Result<()> {
         }
 
         Commands::Orchestrate { goal } => {
+            let repo = repo.ok_or_else(|| anyhow::anyhow!("No repo config found for this directory."))?;
             let goal_text = goal.join(" ");
             if goal_text.trim().is_empty() {
                 eprintln!("{} Goal cannot be empty.", "✗".red());
                 std::process::exit(1);
             }
-            orchestrator::run_orchestrated(client, repo, &goal_text).await?;
+            orchestrator::run_orchestrated(client, &repo, &goal_text).await?;
         }
 
         Commands::Send { message, session } => {
@@ -166,13 +168,15 @@ async fn main() -> Result<()> {
             }
             let sid = session
                 .or_else(|| {
-                    if !repo.single_session_id.is_empty() {
-                        Some(repo.single_session_id.clone())
-                    } else if !repo.manager_session_id.is_empty() {
-                        Some(repo.manager_session_id.clone())
-                    } else {
-                        None
-                    }
+                    repo.as_ref().and_then(|r| {
+                        if !r.single_session_id.is_empty() {
+                            Some(r.single_session_id.clone())
+                        } else if !r.manager_session_id.is_empty() {
+                            Some(r.manager_session_id.clone())
+                        } else {
+                            None
+                        }
+                    })
                 })
                 .ok_or_else(|| anyhow::anyhow!("No session ID available. Use --session <id>"))?;
 
@@ -184,13 +188,15 @@ async fn main() -> Result<()> {
         Commands::Status { count, session } => {
             let sid = session
                 .or_else(|| {
-                    if !repo.single_session_id.is_empty() {
-                        Some(repo.single_session_id.clone())
-                    } else if !repo.manager_session_id.is_empty() {
-                        Some(repo.manager_session_id.clone())
-                    } else {
-                        None
-                    }
+                    repo.as_ref().and_then(|r| {
+                        if !r.single_session_id.is_empty() {
+                            Some(r.single_session_id.clone())
+                        } else if !r.manager_session_id.is_empty() {
+                            Some(r.manager_session_id.clone())
+                        } else {
+                            None
+                        }
+                    })
                 })
                 .ok_or_else(|| anyhow::anyhow!("No session ID. Use --session <id>"))?;
 
@@ -225,17 +231,21 @@ async fn main() -> Result<()> {
         Commands::Tui { session } => {
             let sid = session
                 .or_else(|| {
-                    if !repo.single_session_id.is_empty() {
-                        Some(repo.single_session_id.clone())
-                    } else if !repo.manager_session_id.is_empty() {
-                        Some(repo.manager_session_id.clone())
-                    } else {
-                        None
-                    }
-                })
-                .ok_or_else(|| anyhow::anyhow!("No session ID. Use --session <id>"))?;
+                    repo.as_ref().and_then(|r| {
+                        if !r.single_session_id.is_empty() {
+                            Some(r.single_session_id.clone())
+                        } else if !r.manager_session_id.is_empty() {
+                            Some(r.manager_session_id.clone())
+                        } else {
+                            None
+                        }
+                    })
+                });
 
-            let adapter = adapter::cli_chat_rs::JulesAdapter::new(&cfg.api_key, &sid);
+            let adapter = match sid {
+                Some(id) => adapter::cli_chat_rs::JulesAdapter::new(&cfg.api_key, &id),
+                None => adapter::cli_chat_rs::JulesAdapter::new_global(&cfg.api_key),
+            };
             let mut app = cli_chat_rs::MessengerApp::new(
                 cli_chat_rs::Config::default(),
                 Box::new(adapter),

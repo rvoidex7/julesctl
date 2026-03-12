@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 
 struct Inner {
     client: JulesClient,
-    session_id: String,
+    session_id: Option<String>, // Optional for global mode
     _last_activity_name: Option<String>,
 }
 
@@ -23,7 +23,17 @@ impl JulesAdapter {
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 client: JulesClient::new(api_key),
-                session_id: session_id.to_string(),
+                session_id: Some(session_id.to_string()),
+                _last_activity_name: None,
+            })),
+        }
+    }
+
+    pub fn new_global(api_key: &str) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Inner {
+                client: JulesClient::new(api_key),
+                session_id: None,
                 _last_activity_name: None,
             })),
         }
@@ -56,14 +66,16 @@ impl MessagingAdapter for JulesAdapter {
 
     async fn get_chats(&self) -> AdapterResult<Vec<Chat>> {
         let inner = self.inner.lock().await;
-        Ok(vec![Chat {
-            id: inner.session_id.clone(),
-            name: "Jules Session".to_string(),
+        let sessions = inner.client.list_sessions().await.map_err(|e| e.to_string())?;
+        
+        Ok(sessions.into_iter().map(|s| Chat {
+            id: s.id().to_string(),
+            name: s.title.clone(),
             is_group: false,
             participants: vec!["jules".to_string()],
-            last_message: None,
+            last_message: None, // Could be fetched but let's keep it simple for now
             unread_count: 0,
-        }])
+        }).collect())
     }
 
     async fn get_messages(&self, chat_id: &ChatId, limit: usize) -> AdapterResult<Vec<Message>> {
@@ -160,50 +172,60 @@ impl MessagingAdapter for JulesAdapter {
         let inner_clone = self.inner.clone();
 
         tokio::spawn(async move {
-            let mut last_processed_name = None;
+            let mut last_processed_names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
             
-            // First pass to find the latest activity name
-            {
-                let inner = inner_clone.lock().await;
-                if let Ok(activities) = inner.client.get_activities(&inner.session_id, 1).await {
-                    last_processed_name = activities.last().map(|a| a.name.clone());
-                }
-            }
-
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 
-                let (client, session_id) = {
+                let (client, session_ids) = {
                     let inner = inner_clone.lock().await;
-                    (inner.client.clone(), inner.session_id.clone())
-                };
-
-                let result = if let Some(ref last_name) = last_processed_name {
-                    client.get_activities_after(&session_id, last_name, 10).await
-                } else {
-                    client.get_activities(&session_id, 10).await
-                };
-
-                if let Ok(activities) = result {
-                    for a in activities {
-                        if let Some(m) = a.message.as_ref() {
-                            let is_me = m.author.to_uppercase() == "USER";
-                            let msg = Message {
-                                id: a.name.clone(),
-                                chat_id: session_id.clone(),
-                                sender_id: m.author.clone(),
-                                content: MessageContent::Text(m.text.clone()),
-                                timestamp: DateTime::parse_from_rfc3339(&a.create_time)
-                                    .map(|d| d.with_timezone(&Utc))
-                                    .unwrap_or_else(|_| Utc::now()),
-                                is_from_me: is_me,
-                                status: MessageStatus::Sent,
-                            };
-                            if tx.send(msg).await.is_err() {
-                                return; // Channel closed
-                            }
+                    let ids = if let Some(ref id) = inner.session_id {
+                        vec![id.clone()]
+                    } else {
+                        // In global mode, poll all active sessions
+                        match inner.client.list_sessions().await {
+                            Ok(sessions) => sessions.into_iter().map(|s| s.id().to_string()).collect(),
+                            Err(_) => vec![],
                         }
-                        last_processed_name = Some(a.name.clone());
+                    };
+                    (inner.client.clone(), ids)
+                };
+
+                for session_id in session_ids {
+                    let last_name = last_processed_names.get(&session_id).cloned();
+                    let result = if let Some(ref name) = last_name {
+                        client.get_activities_after(&session_id, name, 10).await
+                    } else {
+                        client.get_activities(&session_id, 1).await
+                    };
+
+                    if let Ok(activities) = result {
+                        for a in activities {
+                            // If this was the first fetch for this session, just record the latest name
+                            if last_name.is_none() {
+                                last_processed_names.insert(session_id.clone(), a.name.clone());
+                                continue;
+                            }
+
+                            if let Some(m) = a.message.as_ref() {
+                                let is_me = m.author.to_uppercase() == "USER";
+                                let msg = Message {
+                                    id: a.name.clone(),
+                                    chat_id: session_id.clone(),
+                                    sender_id: m.author.clone(),
+                                    content: MessageContent::Text(m.text.clone()),
+                                    timestamp: DateTime::parse_from_rfc3339(&a.create_time)
+                                        .map(|d| d.with_timezone(&Utc))
+                                        .unwrap_or_else(|_| Utc::now()),
+                                    is_from_me: is_me,
+                                    status: MessageStatus::Sent,
+                                };
+                                if tx.send(msg).await.is_err() {
+                                    return; // Channel closed
+                                }
+                            }
+                            last_processed_names.insert(session_id.clone(), a.name.clone());
+                        }
                     }
                 }
             }
