@@ -117,13 +117,11 @@ Conflicts are sent to the first session in the queue for resolution.
 
 ---
 
-## cli-chat-rs Integration
+## TUI Dashboard and cli-chat-rs Integration
 
-`cli-chat-rs` is now an internal workspace member, serving as a generic TUI framework using `ratatui`.
-It is completely agnostic to `julesctl` logic and can be used for any chat platform.
-`julesctl` provides the specific Jules AI adapter in `src/adapter/cli_chat_rs.rs`.
+Running `julesctl` with no arguments launches the **Project Dashboard** TUI. This dashboard scopes directly to your currently active project directory and presents available tasks/sessions (Single, Orchestrated Manager, or Manual task queues).
 
-The TUI now properly separates globally fetched sessions from specific project sessions and provides full mouse support.
+From this Dashboard, you can select an active task. `julesctl` will then spin up the `cli-chat-rs` generic TUI specifically scoped to that single session. This ensures that `cli-chat-rs` remains a lightweight and decoupled chat framework utilizing `ratatui`, whilst `julesctl` manages orchestration and project context.
 
 ---
 
