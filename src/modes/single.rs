@@ -8,7 +8,12 @@ use colored::Colorize;
 use std::path::PathBuf;
 use tokio::time::{interval, Duration};
 
-pub async fn run_single(client: JulesClient, repo: &RepoConfig, poll_secs: u64, initial_count: u32) -> Result<()> {
+pub async fn run_single(
+    client: JulesClient,
+    repo: &RepoConfig,
+    poll_secs: u64,
+    initial_count: u32,
+) -> Result<()> {
     let repo_path = PathBuf::from(&repo.path);
     let session_id = &repo.single_session_id;
 
@@ -22,13 +27,23 @@ pub async fn run_single(client: JulesClient, repo: &RepoConfig, poll_secs: u64, 
     println!("\n{} {}", "julesctl".cyan().bold(), "single mode".dimmed());
     println!("  project  : {}", repo.display_name.yellow());
     println!("  session  : {}", session_id.dimmed());
-    println!("  branch   : {}", current_branch(&repo_path).unwrap_or_default().green());
-    println!("  sha      : {}", head_sha(&repo_path).unwrap_or_default().dimmed());
+    println!(
+        "  branch   : {}",
+        current_branch(&repo_path).unwrap_or_default().green()
+    );
+    println!(
+        "  sha      : {}",
+        head_sha(&repo_path).unwrap_or_default().dimmed()
+    );
     println!("  interval : {}s", poll_secs);
     println!("{}", "─".repeat(60).dimmed());
 
     // Show recent activities on startup
-    println!("\n{} Loading last {} activities…\n", "↓".cyan(), initial_count);
+    println!(
+        "\n{} Loading last {} activities…\n",
+        "↓".cyan(),
+        initial_count
+    );
     let activities = client.get_activities(session_id, initial_count).await?;
     display::print_activities(&activities);
 
@@ -73,14 +88,8 @@ pub async fn run_single(client: JulesClient, repo: &RepoConfig, poll_secs: u64, 
             Ok(_) => {
                 // No new activities — also try patch fetch in case Jules pushed
                 // without a detectable activity (API quirk)
-                try_fetch_and_apply(
-                    &client,
-                    session_id,
-                    &repo_path,
-                    repo,
-                    &mut last_patch_sha,
-                )
-                .await;
+                try_fetch_and_apply(&client, session_id, &repo_path, repo, &mut last_patch_sha)
+                    .await;
 
                 let ts = utc_time();
                 print!("\r{} last checked {ts}", "·".dimmed());
@@ -113,7 +122,9 @@ async fn try_fetch_and_apply(
 
             match apply_patch(repo_path, &patch) {
                 Ok(ApplyResult::Success) => {
-                    if let Err(e) = commit(repo_path, &format!("julesctl: apply jules/{session_id}")) {
+                    if let Err(e) =
+                        commit(repo_path, &format!("julesctl: apply jules/{session_id}"))
+                    {
                         eprintln!("{} Commit failed: {e}", "✗".red());
                         return;
                     }
@@ -132,7 +143,9 @@ async fn try_fetch_and_apply(
                         "⚡".yellow(),
                         c.conflicting_files
                     );
-                    eprintln!("  Consider using orchestrated mode (Mode 2) for conflict resolution.");
+                    eprintln!(
+                        "  Consider using orchestrated mode (Mode 2) for conflict resolution."
+                    );
                 }
                 Err(e) => {
                     eprintln!("  {} Patch apply error: {e}", "✗".red());

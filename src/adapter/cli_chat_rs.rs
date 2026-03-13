@@ -4,13 +4,14 @@
 //! Uncomment and adjust method signatures to match your cli-chat-rs version.
 
 use crate::api::JulesClient;
-use std::sync::Arc;
 use chrono::{DateTime, Utc};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 struct Inner {
     client: JulesClient,
-    session_id: Option<String>, // Optional for global mode
+    session_id: Option<String>,              // Optional for global mode
+    project_sessions: Vec<(String, String)>, // (Session ID, Label/Title)
     _last_activity_name: Option<String>,
 }
 
@@ -19,11 +20,23 @@ pub struct JulesAdapter {
 }
 
 impl JulesAdapter {
-    pub fn new(api_key: &str, session_id: &str) -> Self {
+    pub fn new(api_key: &str, session_id: &str, title: &str) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 client: JulesClient::new(api_key),
                 session_id: Some(session_id.to_string()),
+                project_sessions: vec![(session_id.to_string(), title.to_string())],
+                _last_activity_name: None,
+            })),
+        }
+    }
+
+    pub fn new_project(api_key: &str, sessions: Vec<(String, String)>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Inner {
+                client: JulesClient::new(api_key),
+                session_id: None,
+                project_sessions: sessions,
                 _last_activity_name: None,
             })),
         }
@@ -34,6 +47,7 @@ impl JulesAdapter {
             inner: Arc::new(Mutex::new(Inner {
                 client: JulesClient::new(api_key),
                 session_id: None,
+                project_sessions: vec![],
                 _last_activity_name: None,
             })),
         }
@@ -42,8 +56,8 @@ impl JulesAdapter {
 
 use async_trait::async_trait;
 use cli_chat_rs::{
-    AdapterResult, Chat, ChatId, ConnectionStatus, Contact, ContactId, Message,
-    MessageContent, MessageId, MessageStatus, MessagingAdapter,
+    AdapterResult, Chat, ChatId, ConnectionStatus, Contact, ContactId, Message, MessageContent,
+    MessageId, MessageStatus, MessagingAdapter,
 };
 
 #[async_trait]
@@ -66,16 +80,40 @@ impl MessagingAdapter for JulesAdapter {
 
     async fn get_chats(&self) -> AdapterResult<Vec<Chat>> {
         let inner = self.inner.lock().await;
-        let sessions = inner.client.list_sessions().await.map_err(|e| e.to_string())?;
-        
-        Ok(sessions.into_iter().map(|s| Chat {
-            id: s.id().to_string(),
-            name: s.title.clone(),
-            is_group: false,
-            participants: vec!["jules".to_string()],
-            last_message: None, // Could be fetched but let's keep it simple for now
-            unread_count: 0,
-        }).collect())
+
+        // If project_sessions are defined (i.e. we are in a project context with specific sessions)
+        if !inner.project_sessions.is_empty() {
+            let mut chats = Vec::new();
+            for (id, label) in &inner.project_sessions {
+                chats.push(Chat {
+                    id: id.clone(),
+                    name: label.clone(),
+                    is_group: false,
+                    participants: vec!["jules".to_string()],
+                    last_message: None,
+                    unread_count: 0,
+                });
+            }
+            return Ok(chats);
+        }
+
+        // Otherwise (global mode), list all sessions from Jules API
+        let sessions = inner
+            .client
+            .list_sessions()
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(sessions
+            .into_iter()
+            .map(|s| Chat {
+                id: s.id().to_string(),
+                name: s.title.clone(),
+                is_group: false,
+                participants: vec!["jules".to_string()],
+                last_message: None, // Could be fetched but let's keep it simple for now
+                unread_count: 0,
+            })
+            .collect())
     }
 
     async fn get_messages(&self, chat_id: &ChatId, limit: usize) -> AdapterResult<Vec<Message>> {
@@ -172,19 +210,28 @@ impl MessagingAdapter for JulesAdapter {
         let inner_clone = self.inner.clone();
 
         tokio::spawn(async move {
-            let mut last_processed_names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-            
+            let mut last_processed_names: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-                
+
                 let (client, session_ids) = {
                     let inner = inner_clone.lock().await;
                     let ids = if let Some(ref id) = inner.session_id {
                         vec![id.clone()]
+                    } else if !inner.project_sessions.is_empty() {
+                        inner
+                            .project_sessions
+                            .iter()
+                            .map(|(id, _)| id.clone())
+                            .collect()
                     } else {
                         // In global mode, poll all active sessions
                         match inner.client.list_sessions().await {
-                            Ok(sessions) => sessions.into_iter().map(|s| s.id().to_string()).collect(),
+                            Ok(sessions) => {
+                                sessions.into_iter().map(|s| s.id().to_string()).collect()
+                            }
                             Err(_) => vec![],
                         }
                     };

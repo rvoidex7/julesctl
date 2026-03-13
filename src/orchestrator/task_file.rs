@@ -74,7 +74,11 @@ impl TaskFile {
 
     /// Mark a message as processed by id.
     pub fn mark_processed(&mut self, msg_id: &str) {
-        if let Some(m) = self.messages_to_julesctl.iter_mut().find(|m| m.id == msg_id) {
+        if let Some(m) = self
+            .messages_to_julesctl
+            .iter_mut()
+            .find(|m| m.id == msg_id)
+        {
             m.processed = true;
         }
     }
@@ -105,5 +109,9 @@ pub fn parse_resolve_conflict(payload: &serde_json::Value) -> Option<(String, St
 /// Parse reorder_queue payload.
 pub fn parse_reorder_queue(payload: &serde_json::Value) -> Option<Vec<String>> {
     let arr = payload.get("new_order")?.as_array()?;
-    Some(arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+    Some(
+        arr.iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect(),
+    )
 }

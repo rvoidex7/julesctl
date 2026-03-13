@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
+use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use tempfile::NamedTempFile;
-use std::io::Write;
 
 #[derive(Debug)]
 pub enum ApplyResult {

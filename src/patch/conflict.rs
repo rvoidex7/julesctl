@@ -19,9 +19,7 @@ pub async fn resolve_conflict(
     for file in &conflict.conflicting_files {
         let full_path = repo_path.join(file);
         if let Ok(content) = std::fs::read_to_string(&full_path) {
-            file_contexts.push_str(&format!(
-                "\n--- Current content of {file} ---\n{content}\n"
-            ));
+            file_contexts.push_str(&format!("\n--- Current content of {file} ---\n{content}\n"));
         }
     }
 

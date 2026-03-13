@@ -1,3 +1,9 @@
+[workspace]
+members = [
+    ".",
+    "cli-chat-rs"
+]
+
 [package]
 name = "julesctl"
 version = "0.1.0"
@@ -24,6 +30,6 @@ async-trait = "0.1"
 dirs = "5"
 notify = "6"
 tempfile = "3"
-cli-chat-rs = { version = "0.1.0", path = "../cli-chat-rs" }
+cli-chat-rs = { version = "0.1.0", path = "cli-chat-rs" }
 chrono = { version = "0.4", features = ["serde"] }
 keyring = "2.3"

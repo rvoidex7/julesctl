@@ -10,11 +10,11 @@ pub struct PatchQueueEntry {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EntryStatus {
-    Pending,      // waiting for patch from Jules
-    Ready,        // patch fetched, ready to apply
-    _Applying,     // currently being applied
-    Applied,      // successfully applied
-    Conflicted,   // conflict detected, resolution in progress
+    Pending,    // waiting for patch from Jules
+    Ready,      // patch fetched, ready to apply
+    _Applying,  // currently being applied
+    Applied,    // successfully applied
+    Conflicted, // conflict detected, resolution in progress
     _Failed(String),
 }
 

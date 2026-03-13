@@ -119,8 +119,11 @@ Conflicts are sent to the first session in the queue for resolution.
 
 ## cli-chat-rs Integration
 
-See `src/adapter/cli_chat_rs.rs` for the `MessagingAdapter` blueprint.
-Uncomment and adjust method signatures to match your cli-chat-rs version.
+`cli-chat-rs` is now an internal workspace member, serving as a generic TUI framework using `ratatui`.
+It is completely agnostic to `julesctl` logic and can be used for any chat platform.
+`julesctl` provides the specific Jules AI adapter in `src/adapter/cli_chat_rs.rs`.
+
+The TUI now properly separates globally fetched sessions from specific project sessions and provides full mouse support.
 
 ---
 
