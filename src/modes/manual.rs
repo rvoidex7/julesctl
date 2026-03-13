@@ -23,11 +23,20 @@ pub async fn run_manual(client: JulesClient, repo: &RepoConfig, poll_secs: u64) 
     let mut sessions = repo.manual_sessions.clone();
     sessions.sort_by_key(|s| s.queue_position);
 
-    println!("\n{} {}", "julesctl".cyan().bold(), "manual multi-session mode".dimmed());
+    println!(
+        "\n{} {}",
+        "julesctl".cyan().bold(),
+        "manual multi-session mode".dimmed()
+    );
     println!("  project  : {}", repo.display_name.yellow());
     println!("  sessions : {}", sessions.len());
     for s in &sessions {
-        println!("    [{}] {} ({})", s.queue_position, s.label.yellow(), s.session_id.dimmed());
+        println!(
+            "    [{}] {} ({})",
+            s.queue_position,
+            s.label.yellow(),
+            s.session_id.dimmed()
+        );
     }
     println!("{}", "─".repeat(60).dimmed());
 
@@ -40,7 +49,10 @@ pub async fn run_manual(client: JulesClient, repo: &RepoConfig, poll_secs: u64) 
     // Designate first session as conflict resolver
     let resolver_session_id = sessions[0].session_id.clone();
 
-    println!("\n{} Watching all sessions (Ctrl-C to quit)…\n", "◉".green());
+    println!(
+        "\n{} Watching all sessions (Ctrl-C to quit)…\n",
+        "◉".green()
+    );
 
     let mut ticker = interval(Duration::from_secs(poll_secs));
     ticker.tick().await;
@@ -68,10 +80,21 @@ pub async fn run_manual(client: JulesClient, repo: &RepoConfig, poll_secs: u64) 
             .all()
             .iter()
             .find(|e| e.status == EntryStatus::Ready)
-            .map(|e| (e.session_id.clone(), e.task_label.clone(), e.patch_content.clone()));
+            .map(|e| {
+                (
+                    e.session_id.clone(),
+                    e.task_label.clone(),
+                    e.patch_content.clone(),
+                )
+            });
 
         if let Some((sid, label, Some(patch))) = next {
-            println!("\n  {} Applying: {} ({})", "→".cyan(), label.yellow(), sid.dimmed());
+            println!(
+                "\n  {} Applying: {} ({})",
+                "→".cyan(),
+                label.yellow(),
+                sid.dimmed()
+            );
 
             match apply_patch(&repo_path, &patch)? {
                 ApplyResult::Success => {
@@ -101,8 +124,7 @@ pub async fn run_manual(client: JulesClient, repo: &RepoConfig, poll_secs: u64) 
                     for file in &conflict.conflicting_files {
                         let fp = repo_path.join(file);
                         if let Ok(content) = std::fs::read_to_string(&fp) {
-                            file_contexts
-                                .push_str(&format!("--- {file} ---\n{content}\n\n"));
+                            file_contexts.push_str(&format!("--- {file} ---\n{content}\n\n"));
                         }
                     }
 
@@ -118,7 +140,10 @@ pub async fn run_manual(client: JulesClient, repo: &RepoConfig, poll_secs: u64) 
                     {
                         Ok(resolved_patch) => {
                             queue.resolve_conflict(&sid, resolved_patch);
-                            println!("  {} Resolution received, will apply next cycle.", "✓".green());
+                            println!(
+                                "  {} Resolution received, will apply next cycle.",
+                                "✓".green()
+                            );
                         }
                         Err(e) => {
                             eprintln!("  {} Conflict resolution failed: {e}", "✗".red());
@@ -128,7 +153,11 @@ pub async fn run_manual(client: JulesClient, repo: &RepoConfig, poll_secs: u64) 
             }
         } else {
             // Show heartbeat
-            print!("\r{} queue: {} pending", "·".dimmed(), queue.pending_count());
+            print!(
+                "\r{} queue: {} pending",
+                "·".dimmed(),
+                queue.pending_count()
+            );
             use std::io::Write;
             let _ = std::io::stdout().flush();
         }

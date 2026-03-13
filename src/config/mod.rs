@@ -19,7 +19,8 @@ pub fn get_api_key() -> Option<String> {
 pub fn set_api_key(key: &str) -> Result<()> {
     let entry = keyring::Entry::new("julesctl", "default")
         .map_err(|e| anyhow::anyhow!("Failed to access keyring: {}", e))?;
-    entry.set_password(key)
+    entry
+        .set_password(key)
         .map_err(|e| anyhow::anyhow!("Failed to save API key to keyring: {}", e))?;
     Ok(())
 }
@@ -28,9 +29,9 @@ pub fn load() -> Result<Config> {
     let path = config_path();
     let raw = std::fs::read_to_string(&path)
         .with_context(|| format!("Cannot read config at {}", path.display()))?;
-    let mut cfg: Config = toml::from_str(&raw)
-        .with_context(|| format!("Invalid TOML in {}", path.display()))?;
-    
+    let mut cfg: Config =
+        toml::from_str(&raw).with_context(|| format!("Invalid TOML in {}", path.display()))?;
+
     // Prioritize keyring
     if let Some(key) = get_api_key() {
         cfg.api_key = key;

@@ -424,7 +424,7 @@ Jules creates its own remote branches (e.g. `jules/task-14550388554331055113`).
 ## cli-chat-rs Integration
 
 `src/adapter/cli_chat_rs.rs` contains a `MessagingAdapter` implementation
-blueprint for the `cli-chat-rs` TUI crate (https://github.com/rvoidex7/cli-chat-rs).
+which interacts with the `cli-chat-rs` workspace member. The `cli-chat-rs` framework is now a generic `ratatui` based framework with mouse support that is decoupled from any Jules specific implementation.
 
 | cli-chat-rs concept | julesctl concept |
 |--------------------|-----------------|
@@ -434,8 +434,7 @@ blueprint for the `cli-chat-rs` TUI crate (https://github.com/rvoidex7/cli-chat-
 | get_messages() | GET activities (filtered to message type) |
 | Sidebar entry | Session with display_name |
 
-In Mode 2/3, each worker session appears as a separate chat room in the sidebar.
-The manager session appears at the top labeled "Manager".
+When opening the TUI, it properly detects if the current directory is bound to project-specific sessions (single session, orchestrated manager, or multiple manual sessions). If so, it filters the sidebar to *only* show those relevant sessions instead of all globally fetched Jules API sessions.
 
 The TUI polling loop and the patch application loop run as separate tokio tasks.
 

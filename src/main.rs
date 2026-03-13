@@ -103,12 +103,20 @@ async fn main() -> Result<()> {
     let cfg = match config::load() {
         Ok(c) => c,
         Err(e) => {
-            if cli.command.is_none() || matches!(cli.command, Some(Commands::Init) | Some(Commands::Tui { .. })) {
+            if cli.command.is_none()
+                || matches!(
+                    cli.command,
+                    Some(Commands::Init) | Some(Commands::Tui { .. })
+                )
+            {
                 // For init or default TUI, allow starting with empty config
-                config::Config::default() 
+                config::Config::default()
             } else {
                 eprintln!("{} {}", "✗ Config error:".red().bold(), e);
-                eprintln!("  Run {} to create a starter config.", "julesctl init".cyan());
+                eprintln!(
+                    "  Run {} to create a starter config.",
+                    "julesctl init".cyan()
+                );
                 std::process::exit(1);
             }
         }
@@ -128,7 +136,8 @@ async fn main() -> Result<()> {
 
     match command {
         Commands::Watch { interval, messages } => {
-            let repo = repo.ok_or_else(|| anyhow::anyhow!("No repo config found for this directory."))?;
+            let repo =
+                repo.ok_or_else(|| anyhow::anyhow!("No repo config found for this directory."))?;
             match repo.mode {
                 RepoMode::Single => {
                     modes::single::run_single(client, &repo, interval, messages).await?;
@@ -147,7 +156,8 @@ async fn main() -> Result<()> {
         }
 
         Commands::Orchestrate { goal } => {
-            let repo = repo.ok_or_else(|| anyhow::anyhow!("No repo config found for this directory."))?;
+            let repo =
+                repo.ok_or_else(|| anyhow::anyhow!("No repo config found for this directory."))?;
             let goal_text = goal.join(" ");
             if goal_text.trim().is_empty() {
                 eprintln!("{} Goal cannot be empty.", "✗".red());
@@ -225,29 +235,48 @@ async fn main() -> Result<()> {
         }
 
         Commands::Tui { session } => {
-            let sid = session
-                .or_else(|| {
-                    repo.as_ref().and_then(|r| {
+            let adapter = if let Some(id) = session {
+                adapter::cli_chat_rs::JulesAdapter::new(&cfg.api_key, &id, "Single Session")
+            } else if let Some(r) = repo.as_ref() {
+                let mut sessions = Vec::new();
+
+                match r.mode {
+                    RepoMode::Single => {
                         if !r.single_session_id.is_empty() {
-                            Some(r.single_session_id.clone())
-                        } else if !r.manager_session_id.is_empty() {
-                            Some(r.manager_session_id.clone())
-                        } else {
-                            None
+                            sessions
+                                .push((r.single_session_id.clone(), "Single Session".to_string()));
                         }
-                    })
-                });
+                    }
+                    RepoMode::Orchestrated => {
+                        if !r.manager_session_id.is_empty() {
+                            sessions.push((r.manager_session_id.clone(), "Manager".to_string()));
+                        }
+                        // Could potentially load task sessions here if needed, but keeping it simple
+                    }
+                    RepoMode::Manual => {
+                        let mut sorted = r.manual_sessions.clone();
+                        sorted.sort_by_key(|s| s.queue_position);
+                        for s in sorted {
+                            sessions.push((s.session_id.clone(), s.label.clone()));
+                        }
+                    }
+                }
 
-            let adapter = match sid {
-                Some(id) => adapter::cli_chat_rs::JulesAdapter::new(&cfg.api_key, &id),
-                None => adapter::cli_chat_rs::JulesAdapter::new_global(&cfg.api_key),
+                if sessions.is_empty() {
+                    adapter::cli_chat_rs::JulesAdapter::new_global(&cfg.api_key)
+                } else {
+                    adapter::cli_chat_rs::JulesAdapter::new_project(&cfg.api_key, sessions)
+                }
+            } else {
+                adapter::cli_chat_rs::JulesAdapter::new_global(&cfg.api_key)
             };
-            let mut app = cli_chat_rs::MessengerApp::new(
-                cli_chat_rs::Config::default(),
-                Box::new(adapter),
-            );
 
-            app.run().await.map_err(|e| anyhow::anyhow!("TUI Error: {}", e))?;
+            let mut app =
+                cli_chat_rs::MessengerApp::new(cli_chat_rs::Config::default(), Box::new(adapter));
+
+            app.run()
+                .await
+                .map_err(|e| anyhow::anyhow!("TUI Error: {}", e))?;
         }
 
         Commands::Init => unreachable!(),
@@ -266,7 +295,11 @@ fn handle_session_commands(
         .ok_or_else(|| anyhow::anyhow!("No repo entry for current directory"))?;
 
     match sub {
-        SessionCommands::Add { session_id, label, position } => {
+        SessionCommands::Add {
+            session_id,
+            label,
+            position,
+        } => {
             let pos = position.unwrap_or(repo.manual_sessions.len());
             // Shift existing positions if needed
             for s in repo.manual_sessions.iter_mut() {
@@ -280,7 +313,13 @@ fn handle_session_commands(
                 queue_position: pos,
             });
             config::save(&cfg)?;
-            println!("{} Added session {} ({}) at position {}", "✓".green(), session_id.dimmed(), label.yellow(), pos);
+            println!(
+                "{} Added session {} ({}) at position {}",
+                "✓".green(),
+                session_id.dimmed(),
+                label.yellow(),
+                pos
+            );
         }
 
         SessionCommands::Remove { session_id } => {
@@ -301,7 +340,12 @@ fn handle_session_commands(
                 let mut sessions = repo.manual_sessions.clone();
                 sessions.sort_by_key(|s| s.queue_position);
                 for s in &sessions {
-                    println!("  [{}] {} ({})", s.queue_position, s.label.yellow(), s.session_id.dimmed());
+                    println!(
+                        "  [{}] {} ({})",
+                        s.queue_position,
+                        s.label.yellow(),
+                        s.session_id.dimmed()
+                    );
                 }
             }
         }

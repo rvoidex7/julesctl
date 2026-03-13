@@ -16,9 +16,15 @@ pub fn print_activity(activity: &Activity) {
 
     if let Some(msg) = &activity.message {
         let (prefix, text) = if msg.author.to_uppercase() == "USER" {
-            (format!("{} you  ", "▶".blue()), msg.text.as_str().blue().to_string())
+            (
+                format!("{} you  ", "▶".blue()),
+                msg.text.as_str().blue().to_string(),
+            )
         } else {
-            (format!("{} jules", "◀".magenta()), msg.text.as_str().normal().to_string())
+            (
+                format!("{} jules", "◀".magenta()),
+                msg.text.as_str().normal().to_string(),
+            )
         };
         println!("{} {}\n  {}\n", ts.dimmed(), prefix, text);
     } else if let Some(plan) = &activity.plan {
