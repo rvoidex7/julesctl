@@ -434,7 +434,9 @@ which interacts with the `cli-chat-rs` workspace member. The `cli-chat-rs` frame
 | get_messages() | GET activities (filtered to message type) |
 | Sidebar entry | Session with display_name |
 
-When opening the TUI, it properly detects if the current directory is bound to project-specific sessions (single session, orchestrated manager, or multiple manual sessions). If so, it filters the sidebar to *only* show those relevant sessions instead of all globally fetched Jules API sessions.
+When opening the TUI via the default `julesctl` command, the orchestrator launches a main project Dashboard. This dashboard isolates the active sessions defined in your `.config/julesctl/config.toml` for the current directory.
+
+Selecting a session from this Dashboard launches the `cli-chat-rs` frontend bounded to that single specific Jules session.
 
 The TUI polling loop and the patch application loop run as separate tokio tasks.
 

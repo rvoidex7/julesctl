@@ -30,28 +30,6 @@ impl JulesAdapter {
             })),
         }
     }
-
-    pub fn new_project(api_key: &str, sessions: Vec<(String, String)>) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(Inner {
-                client: JulesClient::new(api_key),
-                session_id: None,
-                project_sessions: sessions,
-                _last_activity_name: None,
-            })),
-        }
-    }
-
-    pub fn new_global(api_key: &str) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(Inner {
-                client: JulesClient::new(api_key),
-                session_id: None,
-                project_sessions: vec![],
-                _last_activity_name: None,
-            })),
-        }
-    }
 }
 
 use async_trait::async_trait;

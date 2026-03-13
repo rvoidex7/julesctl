@@ -6,6 +6,7 @@ mod git;
 mod modes;
 mod orchestrator;
 mod patch;
+pub mod tui_dashboard;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -235,48 +236,56 @@ async fn main() -> Result<()> {
         }
 
         Commands::Tui { session } => {
-            let adapter = if let Some(id) = session {
-                adapter::cli_chat_rs::JulesAdapter::new(&cfg.api_key, &id, "Single Session")
-            } else if let Some(r) = repo.as_ref() {
-                let mut sessions = Vec::new();
+            if let Some(id) = session {
+                // Directly launch chat for specific session
+                let adapter =
+                    adapter::cli_chat_rs::JulesAdapter::new(&cfg.api_key, &id, "Direct Session");
+                let mut app = cli_chat_rs::MessengerApp::new(
+                    cli_chat_rs::Config::default(),
+                    Box::new(adapter),
+                );
+                app.run()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("TUI Error: {}", e))?;
+                return Ok(());
+            }
 
-                match r.mode {
-                    RepoMode::Single => {
-                        if !r.single_session_id.is_empty() {
-                            sessions
-                                .push((r.single_session_id.clone(), "Single Session".to_string()));
-                        }
+            loop {
+                // Launch Dashboard first
+                let action = tui_dashboard::run_dashboard(&cfg, repo.as_ref()).await?;
+
+                match action {
+                    tui_dashboard::DashboardAction::Quit => {
+                        break;
                     }
-                    RepoMode::Orchestrated => {
-                        if !r.manager_session_id.is_empty() {
-                            sessions.push((r.manager_session_id.clone(), "Manager".to_string()));
-                        }
-                        // Could potentially load task sessions here if needed, but keeping it simple
+                    tui_dashboard::DashboardAction::OpenChat(session_id, title) => {
+                        // Launch cli-chat-rs specific for this session
+                        let adapter = adapter::cli_chat_rs::JulesAdapter::new(
+                            &cfg.api_key,
+                            &session_id,
+                            &title,
+                        );
+                        let mut app = cli_chat_rs::MessengerApp::new(
+                            cli_chat_rs::Config::default(),
+                            Box::new(adapter),
+                        );
+
+                        // Clear the screen before starting chat to prevent artifacts
+                        println!("\x1B[2J\x1B[1;1H");
+
+                        app.run()
+                            .await
+                            .map_err(|e| anyhow::anyhow!("Chat TUI Error: {}", e))?;
+
+                        // When chat exits, loop continues to reopen dashboard
                     }
-                    RepoMode::Manual => {
-                        let mut sorted = r.manual_sessions.clone();
-                        sorted.sort_by_key(|s| s.queue_position);
-                        for s in sorted {
-                            sessions.push((s.session_id.clone(), s.label.clone()));
-                        }
+                    tui_dashboard::DashboardAction::CreateNew => {
+                        // TODO: Implement task creation logic via CLI TUI prompt
+                        println!("Create New Task flow is not yet implemented.");
+                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                     }
                 }
-
-                if sessions.is_empty() {
-                    adapter::cli_chat_rs::JulesAdapter::new_global(&cfg.api_key)
-                } else {
-                    adapter::cli_chat_rs::JulesAdapter::new_project(&cfg.api_key, sessions)
-                }
-            } else {
-                adapter::cli_chat_rs::JulesAdapter::new_global(&cfg.api_key)
-            };
-
-            let mut app =
-                cli_chat_rs::MessengerApp::new(cli_chat_rs::Config::default(), Box::new(adapter));
-
-            app.run()
-                .await
-                .map_err(|e| anyhow::anyhow!("TUI Error: {}", e))?;
+            }
         }
 
         Commands::Init => unreachable!(),
