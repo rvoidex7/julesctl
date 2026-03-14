@@ -45,7 +45,10 @@ pub async fn run_tui(app: &mut MessengerApp) -> Result<()> {
 async fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut MessengerApp,
-) -> Result<()> {
+) -> Result<()>
+where
+    std::io::Error: From<<B as ratatui::backend::Backend>::Error>,
+{
     // Connect adapter
     if let Err(e) = app.adapter_mut().connect().await {
         return Err(anyhow::anyhow!("Failed to connect: {:?}", e));
@@ -92,7 +95,7 @@ async fn run_app<B: ratatui::backend::Backend>(
             let chunks = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Percentage(30), Constraint::Percentage(70)].as_ref())
-                .split(f.size());
+                .split(f.area());
 
             let right_chunks = Layout::default()
                 .direction(Direction::Vertical)
@@ -151,7 +154,7 @@ async fn run_app<B: ratatui::backend::Backend>(
                 .style(input_style)
                 .block(Block::default().borders(Borders::ALL).title(title));
             f.render_widget(input_widget, right_chunks[1]);
-        })?;
+        }).map_err(|e| anyhow::anyhow!("Terminal draw error: {}", e))?;
 
         if event::poll(Duration::from_millis(100))? {
             match event::read()? {

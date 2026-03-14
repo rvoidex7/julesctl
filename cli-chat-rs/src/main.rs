@@ -98,7 +98,7 @@ async fn run_ui(
             .map_err(|e| format!("Failed to get chats: {}", e))?;
 
         terminal.draw(|f| {
-            let size = f.size();
+            let size = f.area();
             let is_mobile = size.width < MOBILE_THRESHOLD;
 
             let chunks = Layout::default()
