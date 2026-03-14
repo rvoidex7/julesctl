@@ -1,3 +1,4 @@
+pub mod rules;
 pub mod schema;
 pub use schema::*;
 
@@ -51,12 +52,11 @@ pub fn init() -> Result<()> {
     let path = config_path();
     if path.exists() {
         println!("Config already exists at {}", path.display());
-        return Ok(());
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let template = r#"# julesctl configuration
+    } else {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let template = r#"# julesctl configuration
 # API Key is now stored securely in your system keyring.
 # You can set it via the TUI Dashboard or 'julesctl init' if you prefer.
 
@@ -68,7 +68,21 @@ display_name = "current"
 mode = "single"
 single_session_id = "your-session-id"
 "#;
-    std::fs::write(&path, template)?;
-    println!("✓ Created config at {}", path.display());
+        std::fs::write(&path, template)?;
+        println!("✓ Created config at {}", path.display());
+    }
+
+    // Initialize global rules directory
+    let rules_dir = rules::global_rules_dir();
+    if !rules_dir.exists() {
+        std::fs::create_dir_all(&rules_dir)?;
+        let global_prompt = r#"# Global Jules System Prompt Overrides
+# Any text added here will be appended to the initial system prompt sent to Jules AI sessions globally.
+# You can use this for specific framework preferences, formatting rules, or tool context.
+"#;
+        std::fs::write(rules_dir.join("system_prompt.md"), global_prompt)?;
+        println!("✓ Created global rules directory at {}", rules_dir.display());
+    }
+
     Ok(())
 }

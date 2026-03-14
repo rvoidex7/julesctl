@@ -43,7 +43,7 @@ pub async fn run_orchestrated(
         println!("  {} Creating manager session…", "→".cyan());
         let session = client
             .create_session(
-                &manager_bootstrap_prompt(user_goal, &repo.task_file),
+                &manager_bootstrap_prompt(user_goal, &repo.task_file, std::path::Path::new(&repo.path)),
                 &format!(
                     "julesctl manager: {}",
                     &user_goal[..user_goal.len().min(50)]
