@@ -81,7 +81,10 @@ single_session_id = "your-session-id"
 # You can use this for specific framework preferences, formatting rules, or tool context.
 "#;
         std::fs::write(rules_dir.join("system_prompt.md"), global_prompt)?;
-        println!("✓ Created global rules directory at {}", rules_dir.display());
+        println!(
+            "✓ Created global rules directory at {}",
+            rules_dir.display()
+        );
     }
 
     Ok(())

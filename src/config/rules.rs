@@ -25,7 +25,7 @@ pub fn get_local_project_context(repo_root: &Path) -> Option<String> {
         ".julesctl/rules.md",
         ".gsd/context.md",
         "AGENTS.md",
-        "rules.md"
+        "rules.md",
     ];
 
     let mut combined_context = String::new();
@@ -34,7 +34,8 @@ pub fn get_local_project_context(repo_root: &Path) -> Option<String> {
         let file_path = repo_root.join(file);
         if file_path.exists() {
             if let Ok(content) = std::fs::read_to_string(&file_path) {
-                combined_context.push_str(&format!("\n\n--- Context from {} ---\n\n{}", file, content));
+                combined_context
+                    .push_str(&format!("\n\n--- Context from {} ---\n\n{}", file, content));
             }
         }
     }

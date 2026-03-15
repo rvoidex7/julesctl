@@ -3,9 +3,7 @@ mod api;
 mod config;
 mod display;
 mod git;
-mod modes;
 mod orchestrator;
-mod patch;
 pub mod tui_dashboard;
 
 use anyhow::Result;
@@ -136,35 +134,9 @@ async fn main() -> Result<()> {
     let client = api::JulesClient::new(&cfg.api_key);
 
     match command {
-        Commands::Watch { interval, messages } => {
-            let repo =
-                repo.ok_or_else(|| anyhow::anyhow!("No repo config found for this directory."))?;
-            match repo.mode {
-                RepoMode::Single => {
-                    modes::single::run_single(client, &repo, interval, messages).await?;
-                }
-                RepoMode::Manual => {
-                    modes::manual::run_manual(client, &repo, interval).await?;
-                }
-                RepoMode::Orchestrated => {
-                    eprintln!(
-                        "{} Use 'julesctl orchestrate <goal>' for orchestrated mode.",
-                        "✗".red()
-                    );
-                    std::process::exit(1);
-                }
-            }
-        }
-
-        Commands::Orchestrate { goal } => {
-            let repo =
-                repo.ok_or_else(|| anyhow::anyhow!("No repo config found for this directory."))?;
-            let goal_text = goal.join(" ");
-            if goal_text.trim().is_empty() {
-                eprintln!("{} Goal cannot be empty.", "✗".red());
-                std::process::exit(1);
-            }
-            orchestrator::run_orchestrated(client, &repo, &goal_text).await?;
+        Commands::Watch { .. } | Commands::Orchestrate { .. } => {
+            eprintln!("{} Watch and Orchestrate commands have been deprecated in favor of the visual Git Dashboard.\n  Simply run 'julesctl' to launch the TUI.", "✗".red());
+            std::process::exit(1);
         }
 
         Commands::Send { message, session } => {

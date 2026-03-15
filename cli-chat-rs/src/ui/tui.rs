@@ -91,70 +91,72 @@ where
             }
         }
 
-        terminal.draw(|f| {
-            let chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(30), Constraint::Percentage(70)].as_ref())
-                .split(f.area());
+        terminal
+            .draw(|f| {
+                let chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(30), Constraint::Percentage(70)].as_ref())
+                    .split(f.area());
 
-            let right_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(0), Constraint::Length(3)].as_ref())
-                .split(chunks[1]);
+                let right_chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Min(0), Constraint::Length(3)].as_ref())
+                    .split(chunks[1]);
 
-            // Left panel: Chat list
-            let items: Vec<ListItem> = chats
-                .iter()
-                .enumerate()
-                .map(|(i, c)| {
-                    let mut style = Style::default();
-                    if i == selected_chat {
-                        style = style.fg(Color::Yellow).add_modifier(Modifier::BOLD);
-                    }
-                    ListItem::new(Line::from(vec![Span::styled(c.name.clone(), style)]))
-                })
-                .collect();
-            let chats_list =
-                List::new(items).block(Block::default().borders(Borders::ALL).title("Sessions"));
-            f.render_widget(chats_list, chunks[0]);
+                // Left panel: Chat list
+                let items: Vec<ListItem> = chats
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        let mut style = Style::default();
+                        if i == selected_chat {
+                            style = style.fg(Color::Yellow).add_modifier(Modifier::BOLD);
+                        }
+                        ListItem::new(Line::from(vec![Span::styled(c.name.clone(), style)]))
+                    })
+                    .collect();
+                let chats_list = List::new(items)
+                    .block(Block::default().borders(Borders::ALL).title("Sessions"));
+                f.render_widget(chats_list, chunks[0]);
 
-            // Right panel top: Messages
-            let msg_lines: Vec<Line> = messages
-                .iter()
-                .map(|m| {
-                    let text = match &m.content {
-                        crate::types::MessageContent::Text(t) => t.clone(),
-                        _ => "[Attachment]".to_string(),
-                    };
-                    let prefix = if m.is_from_me { "Me: " } else { "Agent: " };
-                    let style = if m.is_from_me {
-                        Style::default().fg(Color::Blue)
-                    } else {
-                        Style::default().fg(Color::Green)
-                    };
-                    Line::from(vec![Span::styled(prefix, style), Span::raw(text)])
-                })
-                .collect();
-            let messages_view = Paragraph::new(msg_lines)
-                .block(Block::default().borders(Borders::ALL).title("Messages"));
-            f.render_widget(messages_view, right_chunks[0]);
+                // Right panel top: Messages
+                let msg_lines: Vec<Line> = messages
+                    .iter()
+                    .map(|m| {
+                        let text = match &m.content {
+                            crate::types::MessageContent::Text(t) => t.clone(),
+                            _ => "[Attachment]".to_string(),
+                        };
+                        let prefix = if m.is_from_me { "Me: " } else { "Agent: " };
+                        let style = if m.is_from_me {
+                            Style::default().fg(Color::Blue)
+                        } else {
+                            Style::default().fg(Color::Green)
+                        };
+                        Line::from(vec![Span::styled(prefix, style), Span::raw(text)])
+                    })
+                    .collect();
+                let messages_view = Paragraph::new(msg_lines)
+                    .block(Block::default().borders(Borders::ALL).title("Messages"));
+                f.render_widget(messages_view, right_chunks[0]);
 
-            // Right panel bottom: Input box
-            let input_style = if input_mode {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default()
-            };
-            let title = if input_mode {
-                "Input (Press Esc to cancel, Enter to send)"
-            } else {
-                "Input (Press 'i' to insert, 'q' to quit)"
-            };
-            let input_widget = Paragraph::new(input.as_str())
-                .style(input_style)
-                .block(Block::default().borders(Borders::ALL).title(title));
-            f.render_widget(input_widget, right_chunks[1]);
-        }).map_err(|e| anyhow::anyhow!("Terminal draw error: {}", e))?;
+                // Right panel bottom: Input box
+                let input_style = if input_mode {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default()
+                };
+                let title = if input_mode {
+                    "Input (Press Esc to cancel, Enter to send)"
+                } else {
+                    "Input (Press 'i' to insert, 'q' to quit)"
+                };
+                let input_widget = Paragraph::new(input.as_str())
+                    .style(input_style)
+                    .block(Block::default().borders(Borders::ALL).title(title));
+                f.render_widget(input_widget, right_chunks[1]);
+            })
+            .map_err(|e| anyhow::anyhow!("Terminal draw error: {}", e))?;
 
         if event::poll(Duration::from_millis(100))? {
             match event::read()? {
