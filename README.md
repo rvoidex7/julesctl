@@ -1,16 +1,25 @@
 # julesctl
 
-> Jules AI multi-session orchestrator — single and parallel session management, automatic patch apply, and conflict resolution.
+> Jules AI local workflow manager — a Git-first, visual orchestrator for your AI coding sessions.
 
-## Modes
+`julesctl` transforms your local terminal into a powerful branch and patch manager for Jules AI. Instead of manually copying code from a browser or constantly switching branches, `julesctl` lets you spin up multiple parallel Jules sessions (AI developers) from any commit, visualize their changes as a Git tree, and seamlessly cherry-pick, test, or revert their patches right from your editor.
 
-| Mode | Command | Description |
-|------|---------|-------------|
-| **Single** | `julesctl watch` | Watch one Jules session, auto-apply patches |
-| **Orchestrated** | `julesctl orchestrate "<goal>"` | Jules manager breaks goal into tasks, opens worker sessions automatically |
-| **Manual** | `julesctl watch` (mode=manual) | You define sessions, julesctl applies patches in queue order |
+## The Paradigm: Git-First Workflow
 
-## Install
+`julesctl` abandons the traditional "chat-bot" UI as its primary interface.
+
+Instead, it treats Jules AI sessions as **Git Branches**.
+When you start a task, Jules writes code and commits it to a remote branch (`jules/task-...`).
+`julesctl` visually graphs these branches alongside your local work.
+
+### Features
+1. **Visual Git Workflow:** See exactly where your local code is, where Jules branched off, and what commits Jules has made (marked with 🦑).
+2. **Patch Picker:** Select any Jules commit in the TUI to instantly preview the `diff`.
+3. **Seamless Integration:** Apply (`cherry-pick`), revert, or merge Jules' code without leaving the dashboard.
+4. **Context-Aware Chat:** Need to talk to Jules about a specific branch? Press `C` on a Jules commit to launch a scoped `ratatui` chat interface (`cli-chat-rs`) that understands the exact context of that branch.
+5. **Moddable Rules:** Fully compatible with tools like Get-Shit-Done (GSD). Automatically injects `.gsd/context.md` or `AGENTS.md` into new Jules sessions.
+
+## Installation
 
 ```bash
 git clone https://github.com/rvoidex7/julesctl
@@ -18,116 +27,30 @@ cd julesctl
 cargo install --path .
 ```
 
-## Setup
+## Setup & Usage
 
 ```bash
+cd my-project
 julesctl init
-# Edit ~/.config/julesctl/config.toml
 ```
+This creates `.config/julesctl/config.toml` (and global rules in `~/.config/julesctl/rules/`).
 
-Config example:
-
-```toml
-api_key = "YOUR_JULES_API_KEY"
-
-# Mode 1 — Single session
-[[repos]]
-path              = "/home/user/projects/my-app"
-display_name      = "My App"
-mode              = "single"
-post_pull         = "cargo build"
-single_session_id = "14550388554331055113"
-
-# Mode 2 — Orchestrated
-[[repos]]
-path         = "/home/user/projects/another-app"
-display_name = "Another App"
-mode         = "orchestrated"
-post_pull    = ""
-
-# Mode 3 — Manual multi-session
-[[repos]]
-path         = "/home/user/projects/big-app"
-display_name = "Big App"
-mode         = "manual"
-post_pull    = ""
-```
-
-### Finding your session ID
-
-Jules URL format: `https://jules.google/tasks/14550388554331055113`  
-The numeric part is your `session_id`.
-
-### API key
-
-Get it from [https://aistudio.google.com/apikey](https://aistudio.google.com/apikey)
-
----
-
-## Mode 1 — Single Session
-
+Run the dashboard:
 ```bash
-cd ~/projects/my-app
-julesctl watch                              # start watch loop
-julesctl send "add a resign button"        # send prompt to Jules
-julesctl status                            # show last 8 activities
-julesctl status --count 20                 # show last 20
+julesctl
 ```
 
-When Jules produces changes, julesctl:
-1. Fetches patch from Jules artifacts API
-2. Applies it to local `jules-orchestrator` branch via `git apply`
-3. Commits and runs `post_pull` script
+### The Dashboard UI
 
----
-
-## Mode 2 — Orchestrated
-
-```bash
-cd ~/projects/another-app
-julesctl orchestrate "Build a user auth system with login, register, and profile pages"
-```
-
-julesctl:
-1. Creates a Jules manager session with a bootstrap prompt
-2. Jules manager writes `.julesctl-tasks.json` with task breakdown
-3. julesctl watches that file, opens worker sessions for each task
-4. Patches from worker sessions are applied in FIFO order
-5. Conflicts are sent back to manager session — Jules resolves them automatically
-
-You never touch a file.
-
----
-
-## Mode 3 — Manual Multi-Session
-
-```bash
-cd ~/projects/big-app
-
-# Add sessions to queue
-julesctl session add 14550388554331055113 "Login feature" --position 0
-julesctl session add 99887766554433221100 "Profile feature" --position 1
-julesctl session add 11223344556677889900 "Notifications" --position 2
-
-julesctl session list       # verify queue
-julesctl watch              # start applying in order
-```
-
-Conflicts are sent to the first session in the queue for resolution.
-
----
+- **Left Panel (Git Graph):** Displays your current workflow's commits.
+  - 🐱 = Github/Remote commit
+  - 🦑 = Jules AI session branch
+  - (No emoji) = Local unpushed commit
+- **Right Panel (Top):** Shows the `diff` (patch preview) and commit message for the selected node.
+- **Right Panel (Bottom):** Available actions (`[A] Apply`, `[R] Revert`, `[C] Open Chat`, `[N] New Session`).
 
 ## TUI Dashboard and cli-chat-rs Integration
 
-Running `julesctl` with no arguments launches the **Project Dashboard** TUI. This dashboard scopes directly to your currently active project directory and presents available tasks/sessions (Single, Orchestrated Manager, or Manual task queues).
+Running `julesctl` with no arguments launches the **Project Dashboard**. This dashboard scopes directly to your currently active project directory and presents the visual Git tree.
 
-From this Dashboard, you can select an active task. `julesctl` will then spin up the `cli-chat-rs` generic TUI specifically scoped to that single session. This ensures that `cli-chat-rs` remains a lightweight and decoupled chat framework utilizing `ratatui`, whilst `julesctl` manages orchestration and project context.
-
----
-
-## How patches work
-
-- All patches fetched via `jules.googleapis.com/v1alpha/sessions/{id}/artifacts`
-- Applied via `git apply` to local `jules-orchestrator` branch
-- Jules-owned remote branches are never checked out
-- Conflicts detected via `git apply --check` before modifying any files
+From this Dashboard, you can select an active Jules task (🦑). `julesctl` will then spin up the `cli-chat-rs` generic TUI specifically scoped to that single session. This ensures that `cli-chat-rs` remains a lightweight and decoupled chat framework utilizing `ratatui`, whilst `julesctl` manages the complex branch orchestration.
