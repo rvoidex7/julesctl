@@ -15,7 +15,6 @@ pub struct GitCommit {
     pub short_sha: String,
     pub title: String,
     pub branch_type: BranchType,
-    pub refs: Vec<String>,
 }
 
 pub fn fetch_origin(repo_path: &Path) -> Result<()> {
@@ -33,6 +32,16 @@ pub fn fetch_origin(repo_path: &Path) -> Result<()> {
 }
 
 pub fn get_workflow_commits(repo_path: &Path) -> Result<Vec<GitCommit>> {
+    // Check if git is initialized and has commits
+    let check = Command::new("git")
+        .current_dir(repo_path)
+        .args(["rev-parse", "HEAD"])
+        .output();
+
+    if check.is_err() || !check.unwrap().status.success() {
+        return Ok(Vec::new()); // No commits or not a git repo
+    }
+
     // Format: SHA\x00ShortSHA\x00Subject\x00Refs
     let output = Command::new("git")
         .current_dir(repo_path)
@@ -71,7 +80,11 @@ pub fn get_workflow_commits(repo_path: &Path) -> Result<Vec<GitCommit>> {
 
         // Parse refs to determine branch type (e.g., "HEAD -> main, origin/main", "origin/jules/task-1234")
         let refs_str = parts[3];
-        let refs: Vec<String> = refs_str.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        let refs: Vec<String> = refs_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
 
         let mut branch_type = BranchType::Local;
 
@@ -80,7 +93,11 @@ pub fn get_workflow_commits(repo_path: &Path) -> Result<Vec<GitCommit>> {
                 // Extract session ID
                 let parts: Vec<&str> = r.split("task-").collect();
                 if parts.len() > 1 {
-                    let id = parts[1].split(&[' ', ','][..]).next().unwrap_or("").to_string();
+                    let id = parts[1]
+                        .split(&[' ', ','][..])
+                        .next()
+                        .unwrap_or("")
+                        .to_string();
                     branch_type = BranchType::JulesSession(id);
                     break; // Jules branch takes precedence for UI emoji
                 }
@@ -94,7 +111,6 @@ pub fn get_workflow_commits(repo_path: &Path) -> Result<Vec<GitCommit>> {
             short_sha,
             title,
             branch_type,
-            refs,
         });
     }
 

@@ -9,6 +9,7 @@ pub fn global_rules_dir() -> PathBuf {
 }
 
 /// Load global manager bootstrap prompt override if exists
+#[allow(dead_code)]
 pub fn get_global_manager_prompt() -> Option<String> {
     let path = global_rules_dir().join("manager_prompt.md");
     if path.exists() {
@@ -20,6 +21,7 @@ pub fn get_global_manager_prompt() -> Option<String> {
 
 /// Load local project context rules/files to append to new session prompts.
 /// It looks for common meta-prompting context files like `AGENTS.md`, `.gsd/context.md`, `.julesctl/rules.md`
+#[allow(dead_code)]
 pub fn get_local_project_context(repo_root: &Path) -> Option<String> {
     let potential_files = [
         ".julesctl/rules.md",

@@ -3,13 +3,11 @@ mod api;
 mod config;
 mod display;
 mod git;
-mod orchestrator;
 pub mod tui_dashboard;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use config::RepoMode;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -251,10 +249,26 @@ async fn main() -> Result<()> {
 
                         // When chat exits, loop continues to reopen dashboard
                     }
+                    tui_dashboard::DashboardAction::InitProject => {
+                        println!("\x1B[2J\x1B[1;1H");
+                        if let Err(e) = config::init() {
+                            println!("{} Failed to initialize config: {}", "✗".red(), e);
+                        }
+                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                        // To apply the new config we actually need to restart the loop
+                        // But since we can't easily hot-reload the outer config reference safely here without structural change,
+                        // we'll instruct the user:
+                        println!("Please restart `julesctl` to load the new project context.");
+                        break;
+                    }
                     tui_dashboard::DashboardAction::CreateNewSession => {
                         // Clear terminal for input prompt
                         println!("\x1B[2J\x1B[1;1H");
-                        println!("{} {}", "julesctl".cyan().bold(), "New Session Creation".dimmed());
+                        println!(
+                            "{} {}",
+                            "julesctl".cyan().bold(),
+                            "New Session Creation".dimmed()
+                        );
                         println!("{}", "─".repeat(50).dimmed());
 
                         let mut goal = String::new();
@@ -263,7 +277,10 @@ async fn main() -> Result<()> {
                         let goal = goal.trim();
 
                         if goal.is_empty() {
-                            println!("{} Goal cannot be empty. Returning to dashboard...", "⚠".yellow());
+                            println!(
+                                "{} Goal cannot be empty. Returning to dashboard...",
+                                "⚠".yellow()
+                            );
                             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                             continue;
                         }
@@ -272,17 +289,27 @@ async fn main() -> Result<()> {
                             println!("{} Building context and creating session...", "→".cyan());
 
                             // Read AGENTS.md, rules, etc.
-                            let full_prompt = config::rules::build_session_prompt(goal, Some(std::path::Path::new(&r.path)));
+                            let full_prompt = config::rules::build_session_prompt(
+                                goal,
+                                Some(std::path::Path::new(&r.path)),
+                            );
 
                             let safe_title: String = goal.chars().take(40).collect();
-                            match client.create_session(
-                                &full_prompt,
-                                &format!("julesctl task: {}", safe_title),
-                                Some(&r.path),
-                                None
-                            ).await {
+                            match client
+                                .create_session(
+                                    &full_prompt,
+                                    &format!("julesctl task: {}", safe_title),
+                                    Some(&r.path),
+                                    None,
+                                )
+                                .await
+                            {
                                 Ok(session) => {
-                                    println!("{} Session created successfully: {}", "✓".green(), session.id());
+                                    println!(
+                                        "{} Session created successfully: {}",
+                                        "✓".green(),
+                                        session.id()
+                                    );
                                     // Make sure we fetch the newly created branch from github before showing dashboard again
                                     let _ = git::graph::fetch_origin(std::path::Path::new(&r.path));
                                 }
@@ -292,7 +319,10 @@ async fn main() -> Result<()> {
                             }
                             tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                         } else {
-                            println!("{} No project configured here. Cannot create session.", "✗".red());
+                            println!(
+                                "{} No project configured here. Cannot create session.",
+                                "✗".red()
+                            );
                             tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                         }
                     }
