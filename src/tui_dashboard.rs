@@ -25,7 +25,6 @@ pub enum DashboardAction {
     Quit,
     OpenChat(String, String), // session_id, title
     CreateNewSession,
-    InitProject, // When no project is configured
 }
 
 pub async fn run_dashboard(_cfg: &Config, repo: Option<&RepoConfig>) -> Result<DashboardAction> {
@@ -159,32 +158,14 @@ where
                 })
                 .collect();
 
-            let list_title = if repo_path.is_none() {
-                " [Action Required] "
-            } else if commits.is_empty() {
+            let list_title = if commits.is_empty() {
                 " No Commits Found "
             } else {
                 " Workflow Commits "
             };
 
-            let final_items = if repo_path.is_none() {
-                vec![
-                    ListItem::new(Line::from(Span::styled(
-                        "No project configured here.",
-                        Style::default().fg(Color::Red),
-                    ))),
-                    ListItem::new(Line::from(Span::raw(""))),
-                    ListItem::new(Line::from(Span::styled(
-                        "  ▶ Initialize Project (julesctl init) ",
-                        Style::default().fg(Color::Black).bg(Color::Yellow),
-                    ))),
-                ]
-            } else {
-                items
-            };
-
-            let list = List::new(final_items)
-                .block(Block::default().borders(Borders::ALL).title(list_title));
+            let list =
+                List::new(items).block(Block::default().borders(Borders::ALL).title(list_title));
             f.render_stateful_widget(list, body_chunks[0], &mut list_state);
 
             // Right Panel (Diff Preview)
@@ -267,9 +248,7 @@ where
                         }
                     }
                     KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Enter => {
-                        if repo_path.is_none() {
-                            return Ok(DashboardAction::InitProject);
-                        } else if !commits.is_empty() {
+                        if !commits.is_empty() {
                             if let BranchType::JulesSession(ref id) =
                                 commits[selected_idx].branch_type
                             {
@@ -357,14 +336,6 @@ where
                             } else if col >= 88 && col <= 98 {
                                 // [Q] Quit
                                 return Ok(DashboardAction::Quit);
-                            }
-                        } else if repo_path.is_none() {
-                            // If they click inside the left panel while no project configured, auto-trigger init
-                            if mouse_event.column < 40
-                                && mouse_event.row > 3
-                                && mouse_event.row < 10
-                            {
-                                return Ok(DashboardAction::InitProject);
                             }
                         } else {
                             // Left panel list clicks
