@@ -4,11 +4,11 @@ mod config;
 mod display;
 mod git;
 pub mod tui_dashboard;
+pub mod tui_home;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use config::RepoMode;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -221,43 +221,16 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
 
-            let mut current_repo = repo.clone();
+            let mut mutable_cfg = cfg.clone();
 
             loop {
-                // Launch Dashboard first
-                let action = tui_dashboard::run_dashboard(&cfg, current_repo.as_ref()).await?;
+                // Launch Home Screen First
+                let home_action = tui_home::run_home(&mutable_cfg).await?;
 
-                match action {
-                    tui_dashboard::DashboardAction::Quit => {
-                        break;
-                    }
-                    tui_dashboard::DashboardAction::OpenChat(session_id, title) => {
-                        // Launch cli-chat-rs specific for this session
-                        let adapter = adapter::cli_chat_rs::JulesAdapter::new(
-                            &cfg.api_key,
-                            &session_id,
-                            &title,
-                        );
-                        let mut app = cli_chat_rs::MessengerApp::new(
-                            cli_chat_rs::Config::default(),
-                            Box::new(adapter),
-                        );
-
-                        // Clear the screen before starting chat to prevent artifacts
-                        println!("\x1B[2J\x1B[1;1H");
-
-                        app.run()
-                            .await
-                            .map_err(|e| anyhow::anyhow!("Chat TUI Error: {}", e))?;
-
-                        // When chat exits, loop continues to reopen dashboard
-                    }
-                    tui_dashboard::DashboardAction::InitProject => {
-                        println!("\x1B[2J\x1B[1;1H");
-
-                        // Let's create an empty config structure in ~/.config/julesctl/config.toml
-                        // if it completely doesn't exist, OR just inject the current directory into it.
-                        let mut mutable_cfg = cfg.clone();
+                let active_repo_path = match home_action {
+                    tui_home::HomeAction::Quit => break,
+                    tui_home::HomeAction::OpenWorkflow(path_str) => PathBuf::from(path_str),
+                    tui_home::HomeAction::CreateNewWorkflow => {
                         let new_repo = config::RepoConfig {
                             path: cwd.to_string_lossy().to_string(),
                             display_name: cwd
@@ -265,7 +238,7 @@ async fn main() -> Result<()> {
                                 .unwrap_or_default()
                                 .to_string_lossy()
                                 .to_string(),
-                            mode: RepoMode::Manual, // Defaulting to Manual for flexible Git workflow
+                            mode: config::RepoMode::Manual,
                             post_pull: "".to_string(),
                             single_session_id: "".to_string(),
                             manager_session_id: "".to_string(),
@@ -273,87 +246,102 @@ async fn main() -> Result<()> {
                             manual_sessions: vec![],
                         };
 
-                        // Only add if it doesn't already exist
-                        if mutable_cfg.find_repo(&cwd).is_none() {
-                            mutable_cfg.repos.push(new_repo.clone());
-                            if let Err(e) = config::save(&mutable_cfg) {
-                                println!("{} Failed to save config: {}", "✗".red(), e);
-                                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                        mutable_cfg.repos.push(new_repo.clone());
+                        if let Err(e) = config::save(&mutable_cfg) {
+                            println!("{} Failed to save config: {}", "✗".red(), e);
+                            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                            continue; // Go back to home loop
+                        }
+                        cwd.clone()
+                    }
+                };
+
+                // Now enter the Dashboard Loop for the selected Workflow
+                loop {
+                    let current_repo = mutable_cfg.find_repo(&active_repo_path).cloned();
+                    let dash_action =
+                        tui_dashboard::run_dashboard(&mutable_cfg, current_repo.as_ref()).await?;
+
+                    match dash_action {
+                        tui_dashboard::DashboardAction::Quit => {
+                            // Back to Home screen
+                            break;
+                        }
+                        tui_dashboard::DashboardAction::OpenChat(session_id, title) => {
+                            // Launch cli-chat-rs specific for this session
+                            let adapter = adapter::cli_chat_rs::JulesAdapter::new(
+                                &mutable_cfg.api_key,
+                                &session_id,
+                                &title,
+                            );
+                            let mut app = cli_chat_rs::MessengerApp::new(
+                                cli_chat_rs::Config::default(),
+                                Box::new(adapter),
+                            );
+
+                            // Clear the screen before starting chat
+                            println!("\x1B[2J\x1B[1;1H");
+
+                            app.run()
+                                .await
+                                .map_err(|e| anyhow::anyhow!("Chat TUI Error: {}", e))?;
+                        }
+                        tui_dashboard::DashboardAction::CreateNewSession => {
+                            println!("\x1B[2J\x1B[1;1H");
+                            println!(
+                                "{} {}",
+                                "julesctl".cyan().bold(),
+                                "New Session Creation".dimmed()
+                            );
+                            println!("{}", "─".repeat(50).dimmed());
+
+                            let mut goal = String::new();
+                            println!("Enter the goal / prompt for the new Jules session:");
+                            std::io::stdin().read_line(&mut goal)?;
+                            let goal = goal.trim();
+
+                            if goal.is_empty() {
+                                println!(
+                                    "{} Goal cannot be empty. Returning to dashboard...",
+                                    "⚠".yellow()
+                                );
+                                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                                 continue;
                             }
 
-                            // Success! Reload the current repository instance for the loop
-                            current_repo = Some(new_repo);
-                        } else {
-                            // It exists but wasn't detected initially for some reason? Update it.
-                            current_repo = mutable_cfg.find_repo(&cwd).cloned();
-                        }
+                            if let Some(r) = current_repo.as_ref() {
+                                println!("{} Building context and creating session...", "→".cyan());
 
-                        // Do not break out of loop, allow user to instantly see the new workflow dashboard
-                    }
-                    tui_dashboard::DashboardAction::CreateNewSession => {
-                        // Clear terminal for input prompt
-                        println!("\x1B[2J\x1B[1;1H");
-                        println!(
-                            "{} {}",
-                            "julesctl".cyan().bold(),
-                            "New Session Creation".dimmed()
-                        );
-                        println!("{}", "─".repeat(50).dimmed());
+                                let full_prompt = config::rules::build_session_prompt(
+                                    goal,
+                                    Some(std::path::Path::new(&r.path)),
+                                );
+                                let safe_title: String = goal.chars().take(40).collect();
 
-                        let mut goal = String::new();
-                        println!("Enter the goal / prompt for the new Jules session:");
-                        std::io::stdin().read_line(&mut goal)?;
-                        let goal = goal.trim();
-
-                        if goal.is_empty() {
-                            println!(
-                                "{} Goal cannot be empty. Returning to dashboard...",
-                                "⚠".yellow()
-                            );
-                            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                            continue;
-                        }
-
-                        if let Some(r) = repo.as_ref() {
-                            println!("{} Building context and creating session...", "→".cyan());
-
-                            // Read AGENTS.md, rules, etc.
-                            let full_prompt = config::rules::build_session_prompt(
-                                goal,
-                                Some(std::path::Path::new(&r.path)),
-                            );
-
-                            let safe_title: String = goal.chars().take(40).collect();
-                            match client
-                                .create_session(
-                                    &full_prompt,
-                                    &format!("julesctl task: {}", safe_title),
-                                    Some(&r.path),
-                                    None,
-                                )
-                                .await
-                            {
-                                Ok(session) => {
-                                    println!(
-                                        "{} Session created successfully: {}",
-                                        "✓".green(),
-                                        session.id()
-                                    );
-                                    // Make sure we fetch the newly created branch from github before showing dashboard again
-                                    let _ = git::graph::fetch_origin(std::path::Path::new(&r.path));
+                                match client
+                                    .create_session(
+                                        &full_prompt,
+                                        &format!("julesctl task: {}", safe_title),
+                                        Some(&r.path),
+                                        None,
+                                    )
+                                    .await
+                                {
+                                    Ok(session) => {
+                                        println!(
+                                            "{} Session created successfully: {}",
+                                            "✓".green(),
+                                            session.id()
+                                        );
+                                        let _ =
+                                            git::graph::fetch_origin(std::path::Path::new(&r.path));
+                                    }
+                                    Err(e) => {
+                                        println!("{} Failed to create session: {}", "✗".red(), e);
+                                    }
                                 }
-                                Err(e) => {
-                                    println!("{} Failed to create session: {}", "✗".red(), e);
-                                }
+                                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                             }
-                            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                        } else {
-                            println!(
-                                "{} No project configured here. Cannot create session.",
-                                "✗".red()
-                            );
-                            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                         }
                     }
                 }
