@@ -251,10 +251,50 @@ async fn main() -> Result<()> {
 
                         // When chat exits, loop continues to reopen dashboard
                     }
-                    tui_dashboard::DashboardAction::CreateNew => {
-                        // TODO: Implement task creation logic via CLI TUI prompt
-                        println!("Create New Task flow is not yet implemented.");
-                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    tui_dashboard::DashboardAction::CreateNewSession => {
+                        // Clear terminal for input prompt
+                        println!("\x1B[2J\x1B[1;1H");
+                        println!("{} {}", "julesctl".cyan().bold(), "New Session Creation".dimmed());
+                        println!("{}", "─".repeat(50).dimmed());
+
+                        let mut goal = String::new();
+                        println!("Enter the goal / prompt for the new Jules session:");
+                        std::io::stdin().read_line(&mut goal)?;
+                        let goal = goal.trim();
+
+                        if goal.is_empty() {
+                            println!("{} Goal cannot be empty. Returning to dashboard...", "⚠".yellow());
+                            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                            continue;
+                        }
+
+                        if let Some(r) = repo.as_ref() {
+                            println!("{} Building context and creating session...", "→".cyan());
+
+                            // Read AGENTS.md, rules, etc.
+                            let full_prompt = config::rules::build_session_prompt(goal, Some(std::path::Path::new(&r.path)));
+
+                            let safe_title: String = goal.chars().take(40).collect();
+                            match client.create_session(
+                                &full_prompt,
+                                &format!("julesctl task: {}", safe_title),
+                                Some(&r.path),
+                                None
+                            ).await {
+                                Ok(session) => {
+                                    println!("{} Session created successfully: {}", "✓".green(), session.id());
+                                    // Make sure we fetch the newly created branch from github before showing dashboard again
+                                    let _ = git::graph::fetch_origin(std::path::Path::new(&r.path));
+                                }
+                                Err(e) => {
+                                    println!("{} Failed to create session: {}", "✗".red(), e);
+                                }
+                            }
+                            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                        } else {
+                            println!("{} No project configured here. Cannot create session.", "✗".red());
+                            tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                        }
                     }
                 }
             }
