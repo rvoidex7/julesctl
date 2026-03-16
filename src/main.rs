@@ -8,6 +8,7 @@ pub mod tui_dashboard;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
+use config::RepoMode;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -220,9 +221,11 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
 
+            let mut current_repo = repo.clone();
+
             loop {
                 // Launch Dashboard first
-                let action = tui_dashboard::run_dashboard(&cfg, repo.as_ref()).await?;
+                let action = tui_dashboard::run_dashboard(&cfg, current_repo.as_ref()).await?;
 
                 match action {
                     tui_dashboard::DashboardAction::Quit => {
@@ -251,15 +254,42 @@ async fn main() -> Result<()> {
                     }
                     tui_dashboard::DashboardAction::InitProject => {
                         println!("\x1B[2J\x1B[1;1H");
-                        if let Err(e) = config::init() {
-                            println!("{} Failed to initialize config: {}", "✗".red(), e);
+
+                        // Let's create an empty config structure in ~/.config/julesctl/config.toml
+                        // if it completely doesn't exist, OR just inject the current directory into it.
+                        let mut mutable_cfg = cfg.clone();
+                        let new_repo = config::RepoConfig {
+                            path: cwd.to_string_lossy().to_string(),
+                            display_name: cwd
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string(),
+                            mode: RepoMode::Manual, // Defaulting to Manual for flexible Git workflow
+                            post_pull: "".to_string(),
+                            single_session_id: "".to_string(),
+                            manager_session_id: "".to_string(),
+                            task_file: ".julesctl-tasks.json".to_string(),
+                            manual_sessions: vec![],
+                        };
+
+                        // Only add if it doesn't already exist
+                        if mutable_cfg.find_repo(&cwd).is_none() {
+                            mutable_cfg.repos.push(new_repo.clone());
+                            if let Err(e) = config::save(&mutable_cfg) {
+                                println!("{} Failed to save config: {}", "✗".red(), e);
+                                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                                continue;
+                            }
+
+                            // Success! Reload the current repository instance for the loop
+                            current_repo = Some(new_repo);
+                        } else {
+                            // It exists but wasn't detected initially for some reason? Update it.
+                            current_repo = mutable_cfg.find_repo(&cwd).cloned();
                         }
-                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                        // To apply the new config we actually need to restart the loop
-                        // But since we can't easily hot-reload the outer config reference safely here without structural change,
-                        // we'll instruct the user:
-                        println!("Please restart `julesctl` to load the new project context.");
-                        break;
+
+                        // Do not break out of loop, allow user to instantly see the new workflow dashboard
                     }
                     tui_dashboard::DashboardAction::CreateNewSession => {
                         // Clear terminal for input prompt
