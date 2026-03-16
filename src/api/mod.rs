@@ -1,5 +1,4 @@
 pub mod activities;
-pub mod artifacts;
 pub mod sessions;
 
 use anyhow::{bail, Result};
