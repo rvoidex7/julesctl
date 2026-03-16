@@ -14,7 +14,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Terminal,
 };
 use std::io;
@@ -70,14 +70,20 @@ where
     }
 
     let mut selected_idx = 0;
+    let mut diff_scroll_offset: u16 = 0;
     let mut current_diff = String::from("Select a commit to view changes...");
     let mut current_diff_sha = String::new();
     let mut action_log = String::from("Ready.");
 
+    let mut list_state = ListState::default();
+
     loop {
+        list_state.select(Some(selected_idx));
+
         // Refresh diff if selection changed
         if !commits.is_empty() && commits[selected_idx].sha != current_diff_sha {
             current_diff_sha = commits[selected_idx].sha.clone();
+            diff_scroll_offset = 0; // Reset scroll on new commit
             if let Some(ref path) = repo_path {
                 current_diff =
                     get_commit_diff(path, &current_diff_sha).unwrap_or_else(|e| e.to_string());
@@ -126,8 +132,16 @@ where
                 .enumerate()
                 .map(|(i, c)| {
                     let mut style = Style::default();
-                    if i == selected_idx {
+                    if i == selected_idx && !c.sha.is_empty() {
                         style = style.fg(Color::Black).bg(Color::Yellow);
+                    }
+
+                    if c.sha.is_empty() {
+                        // This is just an empty graph connector line like "| |"
+                        return ListItem::new(Line::from(vec![Span::styled(
+                            c.graph_prefix.clone(),
+                            Style::default().fg(Color::DarkGray),
+                        )]));
                     }
 
                     let prefix = match c.branch_type {
@@ -136,7 +150,11 @@ where
                         BranchType::Local => "💻",
                     };
 
-                    let text = format!("{} [{}] {}", prefix, c.short_sha, c.title);
+                    // Format: "| * | 🦑 [abcdef] Commit message"
+                    let text = format!(
+                        "{} {} [{}] {}",
+                        c.graph_prefix, prefix, c.short_sha, c.title
+                    );
                     ListItem::new(Line::from(vec![Span::styled(text, style)]))
                 })
                 .collect();
@@ -167,14 +185,16 @@ where
 
             let list = List::new(final_items)
                 .block(Block::default().borders(Borders::ALL).title(list_title));
-            f.render_widget(list, body_chunks[0]);
+            f.render_stateful_widget(list, body_chunks[0], &mut list_state);
 
             // Right Panel (Diff Preview)
-            let diff_view = Paragraph::new(current_diff.as_str()).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Commit Diff / Metadata "),
-            );
+            let diff_view = Paragraph::new(current_diff.as_str())
+                .scroll((diff_scroll_offset, 0))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Commit Diff / Metadata "),
+                );
             f.render_widget(diff_view, body_chunks[1]);
 
             // Footer (Actions)
@@ -225,13 +245,25 @@ where
                 Event::Key(key) => match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(DashboardAction::Quit),
                     KeyCode::Up | KeyCode::Char('k') => {
-                        if selected_idx > 0 {
+                        while selected_idx > 0 {
                             selected_idx -= 1;
+                            if !commits[selected_idx].sha.is_empty() {
+                                break;
+                            } // Skip empty graph lines
                         }
                     }
+                    KeyCode::PageUp => {
+                        diff_scroll_offset = diff_scroll_offset.saturating_sub(10);
+                    }
+                    KeyCode::PageDown => {
+                        diff_scroll_offset = diff_scroll_offset.saturating_add(10);
+                    }
                     KeyCode::Down | KeyCode::Char('j') => {
-                        if !commits.is_empty() && selected_idx + 1 < commits.len() {
+                        while !commits.is_empty() && selected_idx + 1 < commits.len() {
                             selected_idx += 1;
+                            if !commits[selected_idx].sha.is_empty() {
+                                break;
+                            } // Skip empty graph lines
                         }
                     }
                     KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Enter => {

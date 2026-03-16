@@ -15,6 +15,7 @@ pub struct GitCommit {
     pub short_sha: String,
     pub title: String,
     pub branch_type: BranchType,
+    pub graph_prefix: String,
 }
 
 pub fn fetch_origin(repo_path: &Path) -> Result<()> {
@@ -42,16 +43,17 @@ pub fn get_workflow_commits(repo_path: &Path) -> Result<Vec<GitCommit>> {
         return Ok(Vec::new()); // No commits or not a git repo
     }
 
-    // Format: SHA\x00ShortSHA\x00Subject\x00Refs
+    // Format: %H%x00%h%x00%s%x00%D  but we add --graph so git prepends ascii lines like "| * | "
     let output = Command::new("git")
         .current_dir(repo_path)
         .args([
             "log",
             "--all",
             "--date-order",
+            "--graph",
             "--format=%H%x00%h%x00%s%x00%D",
             "-n",
-            "100", // Limit to last 100 commits for UI performance
+            "100",
         ])
         .output()
         .context("Failed to run git log")?;
@@ -69,12 +71,37 @@ pub fn get_workflow_commits(repo_path: &Path) -> Result<Vec<GitCommit>> {
             continue;
         }
 
+        // Because we use --graph, the line starts with ascii art, then our %H etc...
+        // So we need to split at the first 40 character SHA (which will be preceded by ascii graph).
+        // To make it easy, we split by the first \x00. The graph + SHA will be in the first part.
         let parts: Vec<&str> = line.split('\x00').collect();
         if parts.len() < 4 {
+            // It might just be a graph connecting line with no commit data (e.g., "| |")
+            commits.push(GitCommit {
+                sha: String::new(),
+                short_sha: String::new(),
+                title: String::new(),
+                branch_type: BranchType::Local,
+                graph_prefix: line.to_string(), // Just keep the art
+            });
             continue;
         }
 
-        let sha = parts[0].to_string();
+        // Part 0 contains: "GRAPH_ART SHA"
+        // Let's separate the graph from the SHA
+        let graph_and_sha = parts[0];
+        // Git SHA is 40 chars. Let's find where it starts.
+        let mut graph_prefix = String::new();
+        let sha;
+
+        if graph_and_sha.len() >= 40 {
+            let split_idx = graph_and_sha.len() - 40;
+            graph_prefix = graph_and_sha[..split_idx].to_string();
+            sha = graph_and_sha[split_idx..].to_string();
+        } else {
+            sha = graph_and_sha.to_string();
+        }
+
         let short_sha = parts[1].to_string();
         let title = parts[2].to_string();
 
@@ -111,6 +138,7 @@ pub fn get_workflow_commits(repo_path: &Path) -> Result<Vec<GitCommit>> {
             short_sha,
             title,
             branch_type,
+            graph_prefix,
         });
     }
 
