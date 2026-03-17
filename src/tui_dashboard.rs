@@ -25,16 +25,18 @@ pub enum DashboardAction {
     Quit,
     OpenChat(String, String), // session_id, title
     CreateNewSession,
+    SwitchTab(usize),
+    CheckoutBranch(String),
 }
 
-pub async fn run_dashboard(_cfg: &Config, repo: Option<&RepoConfig>) -> Result<DashboardAction> {
+pub async fn run_dashboard(cfg: &Config, active_tab: usize) -> Result<DashboardAction> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let res = dashboard_loop(&mut terminal, repo).await;
+    let res = dashboard_loop(&mut terminal, cfg, active_tab).await;
 
     disable_raw_mode()?;
     execute!(
@@ -49,23 +51,27 @@ pub async fn run_dashboard(_cfg: &Config, repo: Option<&RepoConfig>) -> Result<D
 
 async fn dashboard_loop<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
-    repo: Option<&RepoConfig>,
+    cfg: &Config,
+    active_tab: usize,
 ) -> io::Result<DashboardAction>
 where
     std::io::Error: From<<B as ratatui::backend::Backend>::Error>,
 {
-    let repo_path = repo.map(|r| PathBuf::from(&r.path));
-
-    if let Some(ref path) = repo_path {
-        // Fetch latest commits from remote before drawing
-        let _ = fetch_origin(path);
+    if cfg.repos.is_empty() {
+        return Ok(DashboardAction::Quit); // Safety net
     }
 
+    let repo = &cfg.repos[active_tab];
+    let repo_path = PathBuf::from(&repo.path);
+
+    // Fetch latest commits from remote before drawing
+    let _ = fetch_origin(&repo_path);
+
+    let mut workflow_only = true;
+
     let mut commits: Vec<GitCommit> = Vec::new();
-    if let Some(ref path) = repo_path {
-        if let Ok(fetched_commits) = get_workflow_commits(path) {
-            commits = fetched_commits;
-        }
+    if let Ok(fetched_commits) = get_workflow_commits(&repo_path, workflow_only) {
+        commits = fetched_commits;
     }
 
     let mut selected_idx = 0;
@@ -83,10 +89,8 @@ where
         if !commits.is_empty() && commits[selected_idx].sha != current_diff_sha {
             current_diff_sha = commits[selected_idx].sha.clone();
             diff_scroll_offset = 0; // Reset scroll on new commit
-            if let Some(ref path) = repo_path {
-                current_diff =
-                    get_commit_diff(path, &current_diff_sha).unwrap_or_else(|e| e.to_string());
-            }
+            current_diff =
+                get_commit_diff(&repo_path, &current_diff_sha).unwrap_or_else(|e| e.to_string());
         }
 
         terminal.draw(|f| {
@@ -94,7 +98,7 @@ where
                 .direction(Direction::Vertical)
                 .constraints(
                     [
-                        Constraint::Length(3), // Header
+                        Constraint::Length(3), // Tabs
                         Constraint::Min(0),    // Body
                         Constraint::Length(4), // Footer
                     ]
@@ -102,23 +106,36 @@ where
                 )
                 .split(f.area());
 
-            // Header
-            let header = Paragraph::new(Line::from(vec![
-                Span::styled(
-                    "julesctl",
+            // Tabs Header
+            let tab_titles: Vec<Line> = cfg
+                .repos
+                .iter()
+                .enumerate()
+                .map(|(i, r)| {
+                    let mut style = Style::default();
+                    if i == active_tab {
+                        style = style.fg(Color::Yellow).add_modifier(Modifier::BOLD);
+                    } else {
+                        style = style.fg(Color::DarkGray);
+                    }
+                    Line::from(Span::styled(format!(" {} ", r.display_name), style))
+                })
+                .collect();
+
+            let tabs = ratatui::widgets::Tabs::new(tab_titles)
+                .select(active_tab)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Workflows (1..9 / Tab to switch) "),
+                )
+                .highlight_style(
                     Style::default()
-                        .fg(Color::Cyan)
+                        .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(" | Git-First AI Orchestrator Workflow"),
-                if repo_path.is_none() {
-                    Span::styled(" [No Project Configured]", Style::default().fg(Color::Red))
-                } else {
-                    Span::raw("")
-                },
-            ]))
-            .block(Block::default().borders(Borders::ALL));
-            f.render_widget(header, chunks[0]);
+                )
+                .divider(Span::raw("|"));
+            f.render_widget(tabs, chunks[0]);
 
             let body_chunks = Layout::default()
                 .direction(Direction::Horizontal)
@@ -160,8 +177,10 @@ where
 
             let list_title = if commits.is_empty() {
                 " No Commits Found "
+            } else if workflow_only {
+                " Workflow Commits (Filtered) "
             } else {
-                " Workflow Commits "
+                " All Git Data "
             };
 
             let list =
@@ -187,6 +206,11 @@ where
                     ),
                     Span::raw(" | "),
                     Span::styled(
+                        " [F] Filter View ",
+                        Style::default().fg(Color::White).bg(Color::DarkGray),
+                    ),
+                    Span::raw(" | "),
+                    Span::styled(
                         " [A] Apply ",
                         Style::default().fg(Color::Black).bg(Color::LightGreen),
                     ),
@@ -202,13 +226,18 @@ where
                     ),
                     Span::raw(" "),
                     Span::styled(
+                        " [O] Checkout ",
+                        Style::default().fg(Color::Black).bg(Color::Cyan),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
                         " [N] New Session ",
                         Style::default().fg(Color::Black).bg(Color::Yellow),
                     ),
                     Span::raw(" "),
                     Span::styled(
                         " [Q] Quit ",
-                        Style::default().fg(Color::White).bg(Color::DarkGray),
+                        Style::default().fg(Color::White).bg(Color::Red),
                     ),
                 ]),
                 Line::from(vec![
@@ -264,22 +293,56 @@ where
                     }
                     KeyCode::Char('a') | KeyCode::Char('A') => {
                         if !commits.is_empty() {
-                            if let Some(ref path) = repo_path {
-                                action_log = apply_cherry_pick(path, &commits[selected_idx].sha)
-                                    .unwrap_or_else(|e| format!("Error: {}", e));
-                            }
+                            action_log = apply_cherry_pick(&repo_path, &commits[selected_idx].sha)
+                                .unwrap_or_else(|e| format!("Error: {}", e));
                         }
                     }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
                         if !commits.is_empty() {
-                            if let Some(ref path) = repo_path {
-                                action_log = revert_commit(path, &commits[selected_idx].sha)
-                                    .unwrap_or_else(|e| format!("Error: {}", e));
-                            }
+                            action_log = revert_commit(&repo_path, &commits[selected_idx].sha)
+                                .unwrap_or_else(|e| format!("Error: {}", e));
+                        }
+                    }
+                    KeyCode::Char('f') | KeyCode::Char('F') => {
+                        workflow_only = !workflow_only;
+                        if let Ok(fetched_commits) = get_workflow_commits(&repo_path, workflow_only)
+                        {
+                            commits = fetched_commits;
+                            selected_idx = 0;
+                            current_diff_sha = String::new(); // Force refresh diff
                         }
                     }
                     KeyCode::Char('n') | KeyCode::Char('N') => {
                         return Ok(DashboardAction::CreateNewSession);
+                    }
+                    KeyCode::Char('o') | KeyCode::Char('O') => {
+                        if !commits.is_empty() {
+                            return Ok(DashboardAction::CheckoutBranch(
+                                commits[selected_idx].sha.clone(),
+                            ));
+                        }
+                    }
+                    KeyCode::Tab => {
+                        let mut next = active_tab + 1;
+                        if next >= cfg.repos.len() {
+                            next = 0;
+                        }
+                        return Ok(DashboardAction::SwitchTab(next));
+                    }
+                    KeyCode::BackTab => {
+                        let mut prev = active_tab;
+                        if prev == 0 {
+                            prev = cfg.repos.len().saturating_sub(1);
+                        } else {
+                            prev -= 1;
+                        }
+                        return Ok(DashboardAction::SwitchTab(prev));
+                    }
+                    KeyCode::Char(c) if c.is_ascii_digit() => {
+                        let digit = c.to_digit(10).unwrap() as usize;
+                        if digit > 0 && digit <= cfg.repos.len() {
+                            return Ok(DashboardAction::SwitchTab(digit - 1));
+                        }
                     }
                     _ => {}
                 },
@@ -299,20 +362,16 @@ where
                             if col >= 29 && col <= 40 {
                                 // [A] Apply
                                 if !commits.is_empty() {
-                                    if let Some(ref path) = repo_path {
-                                        action_log =
-                                            apply_cherry_pick(path, &commits[selected_idx].sha)
-                                                .unwrap_or_else(|e| format!("Error: {}", e));
-                                    }
+                                    action_log =
+                                        apply_cherry_pick(&repo_path, &commits[selected_idx].sha)
+                                            .unwrap_or_else(|e| format!("Error: {}", e));
                                 }
                             } else if col >= 41 && col <= 53 {
                                 // [R] Revert
                                 if !commits.is_empty() {
-                                    if let Some(ref path) = repo_path {
-                                        action_log =
-                                            revert_commit(path, &commits[selected_idx].sha)
-                                                .unwrap_or_else(|e| format!("Error: {}", e));
-                                    }
+                                    action_log =
+                                        revert_commit(&repo_path, &commits[selected_idx].sha)
+                                            .unwrap_or_else(|e| format!("Error: {}", e));
                                 }
                             } else if col >= 54 && col <= 69 {
                                 // [C] Open Chat
@@ -330,13 +389,28 @@ where
                                                 .to_string();
                                     }
                                 }
-                            } else if col >= 70 && col <= 87 {
+                            } else if col >= 70 && col <= 83 {
+                                // [O] Checkout
+                                if !commits.is_empty() {
+                                    return Ok(DashboardAction::CheckoutBranch(
+                                        commits[selected_idx].sha.clone(),
+                                    ));
+                                }
+                            } else if col >= 84 && col <= 100 {
                                 // [N] New Session
                                 return Ok(DashboardAction::CreateNewSession);
-                            } else if col >= 88 && col <= 98 {
+                            } else if col >= 101 && col <= 110 {
                                 // [Q] Quit
                                 return Ok(DashboardAction::Quit);
                             }
+                        } else if mouse_event.row < 3 {
+                            // Tab click detection
+                            // Crude calculation, switch tabs if clicked near the top row
+                            let mut next = active_tab + 1;
+                            if next >= cfg.repos.len() {
+                                next = 0;
+                            }
+                            return Ok(DashboardAction::SwitchTab(next));
                         } else {
                             // Left panel list clicks
                             let clicked_idx = mouse_event.row.saturating_sub(4) as usize; // Account for header

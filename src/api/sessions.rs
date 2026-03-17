@@ -66,17 +66,20 @@ impl JulesClient {
         &self,
         prompt: &str,
         title: &str,
-        repo: Option<&str>,
+        github_url: Option<&str>,
         branch: Option<&str>,
     ) -> Result<Session> {
         let url = format!("{}/sessions", Self::base_url());
+
         let body = CreateSessionRequest {
             prompt: prompt.to_string(),
             title: title.to_string(),
-            source_context: repo.map(|r| SourceContext {
-                repository: r.to_string(),
-                branch: branch.unwrap_or("").to_string(),
-            }),
+            source_context: github_url
+                .filter(|u| !u.trim().is_empty())
+                .map(|u| SourceContext {
+                    repository: u.to_string(),
+                    branch: branch.unwrap_or("").to_string(),
+                }),
         };
 
         let resp = self

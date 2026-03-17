@@ -58,15 +58,14 @@ pub fn init() -> Result<()> {
         }
         let template = r#"# julesctl configuration
 # API Key is now stored securely in your system keyring.
-# You can set it via the TUI Dashboard or 'julesctl init' if you prefer.
 
 api_key = "" # Leave empty to use system keyring (recommended)
 
 [[repos]]
 path = "."
-display_name = "current"
-mode = "single"
-single_session_id = "your-session-id"
+display_name = "current_workflow"
+github_url = "github.com/your-org/your-repo" # Used by Jules API
+sessions = []
 "#;
         std::fs::write(&path, template)?;
         println!("✓ Created config at {}", path.display());
