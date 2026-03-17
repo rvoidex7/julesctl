@@ -32,7 +32,7 @@ pub fn fetch_origin(repo_path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn get_workflow_commits(repo_path: &Path) -> Result<Vec<GitCommit>> {
+pub fn get_workflow_commits(repo_path: &Path, workflow_only: bool) -> Result<Vec<GitCommit>> {
     // Check if git is initialized and has commits
     let check = Command::new("git")
         .current_dir(repo_path)
@@ -43,18 +43,29 @@ pub fn get_workflow_commits(repo_path: &Path) -> Result<Vec<GitCommit>> {
         return Ok(Vec::new()); // No commits or not a git repo
     }
 
+    let mut args = vec![
+        "log",
+        "--date-order",
+        "--graph",
+        "--format=%H%x00%h%x00%s%x00%D",
+        "-n",
+        "100",
+    ];
+
+    if workflow_only {
+        // Only show branches that are jules/task or main/HEAD (The direct workflow context)
+        // We do this by pointing to HEAD, and branches matching jules/*
+        args.push("HEAD");
+        args.push("--branches=jules/*");
+        args.push("--remotes=origin/jules/*");
+    } else {
+        args.push("--all");
+    }
+
     // Format: %H%x00%h%x00%s%x00%D  but we add --graph so git prepends ascii lines like "| * | "
     let output = Command::new("git")
         .current_dir(repo_path)
-        .args([
-            "log",
-            "--all",
-            "--date-order",
-            "--graph",
-            "--format=%H%x00%h%x00%s%x00%D",
-            "-n",
-            "100",
-        ])
+        .args(&args)
         .output()
         .context("Failed to run git log")?;
 
@@ -194,5 +205,19 @@ pub fn revert_commit(repo_path: &Path, sha: &str) -> Result<String> {
 
         let err = String::from_utf8_lossy(&output.stderr);
         Err(anyhow::anyhow!("Failed to revert {}:\n{}", sha, err))
+    }
+}
+
+pub fn checkout_branch(repo_path: &Path, branch_name_or_sha: &str) -> Result<String> {
+    let output = Command::new("git")
+        .current_dir(repo_path)
+        .args(["checkout", branch_name_or_sha])
+        .output()?;
+
+    if output.status.success() {
+        Ok(format!("Successfully checked out {}", branch_name_or_sha))
+    } else {
+        let err = String::from_utf8_lossy(&output.stderr);
+        Err(anyhow::anyhow!("Checkout failed:\n{}", err))
     }
 }

@@ -12,42 +12,22 @@ pub struct Config {
 pub struct RepoConfig {
     pub path: String,
     pub display_name: String,
-    pub mode: RepoMode,
+
+    #[serde(default)]
+    pub github_url: String, // Useful for the API context
+
     #[serde(default)]
     pub post_pull: String,
 
-    // Mode 1
+    // We store sessions here just for UI labeling purposes
     #[serde(default)]
-    pub single_session_id: String,
-
-    // Mode 2
-    #[serde(default)]
-    pub manager_session_id: String,
-    #[serde(default = "default_task_file")]
-    pub task_file: String,
-
-    // Mode 3: sessions added dynamically, stored here
-    #[serde(default)]
-    pub manual_sessions: Vec<ManualSession>,
-}
-
-fn default_task_file() -> String {
-    ".julesctl-tasks.json".to_string()
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum RepoMode {
-    Single,
-    Orchestrated,
-    Manual,
+    pub sessions: Vec<JulesSession>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct ManualSession {
+pub struct JulesSession {
     pub session_id: String,
     pub label: String,
-    pub queue_position: usize,
 }
 
 impl Config {
