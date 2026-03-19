@@ -79,33 +79,54 @@ Within the `cli-chat-rs` UI, messages must be formatted based on their source/ty
 
 ---
 
-## Professional CLI/TUI Enhancements (Codex CLI Inspirations)
+## Professional Keybindings & Navigation Standards
 
-To elevate `julesctl` to a top-tier developer tool that outperforms web UIs, we adopt the following technical standards inspired by `codex-rs`:
+To ensure a seamless, native terminal experience, the following universal keybinding map is strictly enforced:
 
-1. **Event-Driven UI (AppEvent Bus):**
-   - The TUI must never freeze or block on API calls. We will implement a centralized `AppEvent` channel (e.g., `AppEvent::SubmitPrompt`, `AppEvent::PatchFetched`).
-   - Widgets emit events; the main event loop processes them asynchronously and updates the UI state (utilizing a `HistoryCell` caching pattern to prevent re-rendering massive chat logs).
-2. **Fuzzy Finding & Navigation:**
-   - Integrate `nucleo` and `ignore` for lightning-fast, `.gitignore`-aware fuzzy searching when switching Workflows or selecting files to add as context (e.g., typing `@src/main.rs`).
-3. **Native Vim Keybindings & Editor Fallback:**
-   - Implement native Vim navigation (`hjkl` for movement, `g` for top, `G` for bottom, `/` for search) across all list and scrollable Ratatui components.
-   - Implement an `$EDITOR` fallback (e.g., pressing `e` to open a massive AI-generated patch or configuration file directly in Vim/Nano for manual editing before applying).
-4. **Advanced Clipboard Support:**
-   - Use the `arboard` crate coupled with OSC 52 escape sequences to guarantee copy-pasting works flawlessly, even over SSH connections or within WSL/Termux environments.
+### Navigational Fallbacks
+- Native **Vim movement keys** (`j` down, `k` up, `h` collapse left, `l` expand right, `g` top, `G` bottom) are fully supported across all lists and scrollable components.
+- Standard **Arrow Keys** remain universally active for users unfamiliar with Vim.
+
+### Action Keybindings (First-Letter Mnemonic)
+- **`Tab`**: Switch between active top-level Workflows.
+- **`v`**: View toggle (Switch Left Pane between Branch Tree and Commit Graph).
+- **`s`**: Scope toggle (Switch Left Pane between Workflow-only and Global repo data).
+- **`c` or `Enter`**: Open the Chat (`cli-chat-rs`) overlay for the selected Jules branch.
+- **`a`**: Apply / Cherry-pick the currently previewed patch/commit into the active working branch.
+- **`r`**: Revert / Undo the selected commit or patch.
+- **`n`**: Initialize a **New Session** from the currently highlighted branch.
+- **`b`**: Enter **Read-Only Observer Mode** (Inspect a branch's commits/files without checking out or altering the local working environment).
+- **`e`**: Open the currently previewed patch or payload in the external `$EDITOR` (e.g., vim/nano) for manual review/modification.
+- **`q` or `Esc`**: Close modal/overlay or quit the application.
+- **`/`**: Open the fuzzy finder search bar.
 
 ---
 
-## Critical Mechanisms & Safety Rules
+## Core Mechanisms, Safety, and Synchronization
 
-1. **Strict Branch Protection (Auto-Checkout):**
-   - **Rule:** Direct commits by humans to a Jules AI branch (🦑) are strictly forbidden, as it breaks the AI's ability to pull/sync cleanly.
-   - **Mechanism:** If a user selects a Jules branch and attempts to apply local patches or develop on it, `julesctl` must instantly and automatically prompt/create a new local working branch stemming from that commit, shifting the user safely away from the AI's isolated branch.
+### 1. New Session Initialization Flow (`n`)
+- Pressing `n` on a highlighted branch triggers a specific TUI modal flow.
+- The UI prompts the user for the session goal (e.g., "Fix login bug").
+- `julesctl` gathers the required `create_session` parameters:
+  - `source_context`: Safely formatted as a remote GitHub URL (e.g., `github.com/owner/repo`) to prevent `HTTP 400 Bad Request` errors.
+  - `source_branch`: The branch highlighted by the user in the UI.
+  - `manager_prompt`: The user's goal input + dynamically injected rules from `.gsd/context.md`, `AGENTS.md`, and global `~/.config/julesctl/rules/`.
+- The API is called, and Jules spins up a new remote branch (`jules/task-...`).
 
-2. **API Context Safety (HTTP 400 Fix):**
-   - The `create_session` API call frequently fails with `HTTP 400 Bad Request` because it expects a valid remote GitHub URL format (e.g., `github.com/owner/repo`) in the `source_context` field.
-   - **Mechanism:** The CLI must rigorously format, validate, or safely omit local absolute paths before dispatching API requests to initialize a session.
+### 2. Strict Branch Protection (Auto-Checkout)
+- **Rule:** Direct commits by humans to a Jules AI branch (🦑) are strictly forbidden, as it breaks the AI's ability to pull/sync cleanly.
+- **Mechanism:** If a user selects a Jules branch and attempts to apply local patches or develop on it, `julesctl` must instantly and automatically prompt/create a new local working branch stemming from that commit.
 
-3. **Meta-Prompting Moddability:**
-   - `julesctl` will act as a host for external context-engineering tools like Get-Shit-Done (GSD).
-   - Initial prompts sent to Jules will automatically append global rules from `~/.config/julesctl/rules/`, and local context files like `.julesctl/rules.md`, `AGENTS.md`, and `.gsd/context.md`.
+### 3. Dynamic Auto-Sync and Polling Mechanisms
+Because Jules AI operates remotely and asynchronously, `julesctl` must keep the UI updated via two distinct synchronization channels:
+
+1. **Jules API Refresh (Message Polling):**
+   - **What it does:** Fetches lightweight JSON `Activity` logs from the Jules API. It checks if the AI has sent a new message, finished thinking, or generated a plan. It does *not* download large code files.
+   - **UI Mechanism:** A customizable countdown button (e.g., `[ Refresh Jules (59s) ]`). The countdown ticks dynamically (`58s`, `57s`...). When it hits 0, it auto-refreshes the chat logs.
+   - **Manual Override:** The user can click the button or trigger the sync key at any time (e.g., at `30s` remaining) to force an immediate API refresh.
+
+2. **Git Sync (Code Fetching):**
+   - **What it does:** Executes heavy `git fetch origin` or `git pull` commands. When the API indicates Jules has pushed new code, this sync actually downloads the commits (🦑 nodes) so they appear in the local TUI graph for cherry-picking.
+   - **UI Mechanism:** A customizable countdown button (e.g., `[ Git Sync (5m) ]`). Similar to the API refresh, it ticks down and auto-fetches, but can be manually triggered at any point.
+
+*Both timers can be configured by the user (or set to "Manual Only" to disable auto-polling) depending on network/API rate limits.*
