@@ -159,7 +159,7 @@ async fn main() -> Result<()> {
             display::print_activities(&activities);
         }
 
-        Commands::Session(sub) => {
+        Commands::Session(_sub) => {
             // Deprecated, print warning
             eprintln!("{} Manual session queue management is deprecated. Please use the visual Git dashboard.", "⚠".yellow());
         }
