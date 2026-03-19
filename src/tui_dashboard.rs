@@ -1,4 +1,4 @@
-use crate::config::{Config, RepoConfig};
+use crate::config::Config;
 use crate::git::graph::{
     apply_cherry_pick, fetch_origin, get_commit_diff, get_workflow_commits, revert_commit,
     BranchType, GitCommit,
