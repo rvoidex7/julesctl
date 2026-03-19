@@ -9,7 +9,8 @@
 1. **Death of "Single Mode":** There is no "single session" or "manual chat" mode. Everything revolves around a **Workflow**. A single repository directory can host multiple independent Workflows simultaneously.
 2. **Jules Sessions are Git Branches:** Every AI session is simply a Git branch. `julesctl` tracks the origin, the divergence, and the patches.
    - *Note on "Ghost Commits": Unlike other CLI tools that use local hidden stashes/ghost commits to protect user state, `julesctl`'s native AI branch isolation makes this unnecessary. The AI commits to its own remote branch (🦑), inherently protecting local uncommitted work.*
-3. **Infinite Parallelism:** A user can start one initial "Planner" Jules session. From that session's branch, the user can spawn 10 parallel "Worker" Jules sessions, each assigned a different module.
+3. **Infinite Parallelism (User Initiative):** Orchestration is entirely manual and at the user's discretion.
+   - *Example Use Case:* A user *could* start one initial "Planner" Jules session, and from that session's branch, manually spawn 10 parallel "Worker" Jules sessions, each assigned a different module. However, this is just an example; users have absolute freedom to branch, checkout, and create sessions wherever and however they want.
 4. **Patch Picking vs Copy-Pasting:** Instead of copy-pasting code from an AI chat, users visually inspect AI commits and seamlessly cherry-pick or rebase them into their local working branch.
 
 ## TUI Architecture & Layout
