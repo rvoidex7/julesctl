@@ -31,8 +31,8 @@ The TUI must be native, fast, feature-rich regarding keyboard/mouse interactions
 - The very top of the screen features a tabbed interface representing active Workflows.
 - Users can seamlessly switch between entirely different Workflows (even across different projects) instantly, akin to switching tabs in a web browser. The old, useless "Title Pane" is removed.
 
-### 3. The 2-Pane Dashboard Layout (No 3rd Pane Clutter)
-To avoid cramping the screen (especially critical for Termux/mobile), we strictly use 2 Panes. Complex views like Chat open as full-screen overlays/modals over the dashboard.
+### 3. The 2-Pane Workflow View Layout (No 3rd Pane Clutter)
+To avoid cramping the screen (especially critical for Termux/mobile), we strictly use 2 Panes. Complex views like Chat open as full-screen overlays/modals over the Workflow View.
 
 #### Pane 1 (Viewer/Navigator - Left/Top):
 This pane contains internal toggles to switch between different data scopes and visual representations.
@@ -69,7 +69,7 @@ A critical, non-negotiable architectural rule is the absolute decoupling of the 
 
 ### 3. Scoped Chat Access & Limitations
 - **Launch Point:** The Chat Interface (`cli-chat-rs`) is explicitly launched **ONLY from the Branch View** when a Jules branch (🦑) is highlighted.
-- **Overlay Rendering:** It opens as a full-screen overlay/modal over the dashboard (not as a cramped 3rd pane).
+- **Overlay Rendering:** It opens as a full-screen overlay/modal over the Workflow View (not as a cramped 3rd pane).
 - **Performance Limit:** It only loads and displays the **last 7 messages** by default to ensure maximum performance and UI responsiveness.
 
 ### 4. Chat Layout Rules (Codex-rs Inspired)
@@ -124,10 +124,62 @@ To avoid overengineering (like WebHooks) while providing a real-time feel, `jule
 
 1. **Jules API Refresh (Message/Activity Polling):**
    - **What it does:** Fetches lightweight JSON `Activity` logs from the Jules API to detect new messages, plans, or status updates.
-   - **Contextual Execution:** This polling loop is **ONLY ACTIVE when the `cli-chat-rs` overlay is open** for a specific session. There is no reason to poll the API for messages if the user is just looking at the Dashboard Git graph.
+   - **Contextual Execution:** This polling loop is **ONLY ACTIVE when the `cli-chat-rs` overlay is open** for a specific session. There is no reason to poll the API for messages if the user is just looking at the Workflow Git graph.
    - **UI Mechanism:** A customizable countdown button inside the chat UI (e.g., `[ Refresh Chat (15s) ]`). The user can manually click it or press `r` inside the chat to force an instant refresh.
 
 2. **Git Sync (Code/Commit Fetching):**
    - **What it does:** Executes a heavy `git fetch origin` command to download actual code commits (🦑 nodes) into the local TUI graph for cherry-picking.
-   - **Contextual Execution:** Runs periodically on the main Dashboard (e.g., every 3-5 minutes) or triggered manually.
-   - **UI Mechanism:** A countdown button on the main Dashboard (e.g., `[ Git Sync (5m) ]`).
+   - **Contextual Execution:** Runs periodically on the main Workflow View (e.g., every 3-5 minutes) or triggered manually.
+   - **UI Mechanism:** A countdown button on the main Workflow View (e.g., `[ Git Sync (5m) ]`).
+
+---
+
+## Implementation Guidelines & Rust Best Practices for AI Agents
+
+When developing or refactoring features for `julesctl`, the following Rust optimizations and safety constraints MUST be obeyed to ensure the TUI remains blazing fast and stable:
+
+### 1. Asynchronous Subprocesses (Avoiding UI Freezes)
+- TUI applications block on the main thread. Therefore, executing heavy blocking commands like `git fetch` or `git log` via `std::process::Command` directly in the UI loop is strictly prohibited.
+- **Rule:** Use `tokio::process::Command` or wrap blocking Git shell invocations in `tokio::task::spawn_blocking` to keep the UI responsive.
+
+### 2. TUI Rendering Optimizations (Zero-Copy & Lifetimes)
+- The `terminal.draw` closure executes dozens of times per second. Allocating strings inside this loop drastically impacts performance.
+- **Rule:** Avoid `.clone()`, `.to_string()`, and `format!` inside rendering blocks whenever possible. Instead, structure data with references (`&'a str`) or use Ratatui's `Cow` (Clone-on-write) wrapped strings (like `Span::raw("Static")`).
+
+### 3. Safe Truncation (UTF-8 Emoji Awareness)
+- Slicing multi-byte characters (like the 🦑 emoji) at byte boundaries (e.g., `&s[..10]`) will cause the application to panic and ruin the terminal state.
+- **Rule:** Always truncate strings safely using iterators: `.chars().take(n).collect::<String>()`.
+
+### 4. Error Handling and Panic Prevention
+- Panicking in a raw-mode terminal leaves the user's terminal broken (no echoing, hidden cursor).
+- **Rule:** The use of `.unwrap()` and `.expect()` is strictly forbidden outside of test modules. All errors must be handled safely and surfaced to the UI's `action_log` or status bar.
+
+
+---
+
+## Data Management & Cross-Device Sync (Ahenk)
+
+`julesctl` aims to provide a seamless cross-device experience (e.g., transitioning from a Desktop PC to an Android phone running Termux) without cluttering project repositories or relying on centralized cloud storage for personal application state.
+
+### 1. Zero Repository Bloat (No `.julesctl` Folder)
+- We strictly avoid creating proprietary configuration folders (like `.julesctl`) inside user repositories.
+- Project-specific AI rules should rely on universally accepted meta-prompting files like `AGENTS.md` or `.gsd/context.md`.
+- **Reason:** Application state, workflow relations, and UI preferences are personal to the developer. Committing them to a shared Git repository causes unnecessary bloat and history pollution.
+
+### 2. Global State Storage (`~/.config/julesctl`)
+- All persistent application state must be stored in the OS-level global configuration directory (`~/.config/julesctl/` on Linux/Mac/Termux).
+- This includes:
+  - Active Workflow/Tab definitions.
+  - The hierarchical mapping of Jules sessions (Session A spawned Session B).
+  - API activity cache (JSON message history downloaded from Jules).
+- Credentials (API Keys) are securely stored in the OS `keyring` and never saved in plaintext files.
+
+### 3. Cross-Device Synchronization via Ahenk (P2P)
+- `julesctl` will integrate the [Ahenk](https://github.com/Appaholics/Ahenk) library for Peer-to-Peer (P2P) network synchronization between devices (e.g., PC <-> Phone).
+- **Scope of Ahenk Sync:** Ahenk is exclusively used to synchronize the personal state stored in `~/.config/julesctl`. When you open `julesctl` on your phone, Ahenk pulls your active tabs, workflow structures, and cached Jules chat history from your PC.
+- **Benefits:** This prevents the phone client from having to re-fetch identical chat histories from the Jules API, saving network bandwidth and quota limits, while providing an instant, seamless UX transition.
+
+### 4. Code Synchronization (Strictly Git-First)
+- Ahenk will **never** be used to synchronize source code, local unpushed commits, or resolve merge conflicts between devices.
+- Both the PC and the Phone (Termux) are treated as "Thick Clients" with their own cloned Git repositories.
+- **Rule:** If a user wants to view or patch AI code on their phone, they must fetch it directly from the remote origin (`git fetch`) via the standard Git protocol. We do not reinvent code synchronization.
