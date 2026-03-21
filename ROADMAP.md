@@ -188,7 +188,7 @@ When developing or refactoring features for `julesctl`, the following Rust optim
 
 To reduce the need for users to manually edit raw configuration files, `julesctl` will introduce a dedicated **Settings & Configuration UI** overlay.
 - This pane will provide a visual interface to manage the global state stored in the `~/.config/julesctl/` directory.
-- Users will be able to configure project-agnostic AI rules, update credentials securely, adjust UI preferences, and monitor **Ahenk Sync Statuses** directly from the TUI.
+- Users will be able to configure project-agnostic AI rules, update credentials securely, adjust UI preferences, configure **Default Editors (Vim vs VSCode)** for conflict resolution, set default **Prompt Destinations**, and monitor **Ahenk Sync Statuses** directly from the TUI.
 - The interface will follow the responsive 2-pane principles, ensuring accessibility on both desktop and mobile/Termux environments.
 
 ## Feature Elaborations & Future Additions
@@ -215,3 +215,17 @@ To enhance usability across different terminal emulators and SSH sessions, `jule
 ### 5. External `$EDITOR` Fallback
 For scenarios requiring complex manual conflict resolution or deep code review, `julesctl` will support launching an external editor.
 - Pressing a dedicated keybind will temporarily save the current patch or payload to disk, open the user's `$EDITOR` (e.g., `vim`, `nano`, `hx`), and automatically ingest the modified content upon exit.
+
+### 6. The Conflict Resolution Framework
+When a developer applies (cherry-picks) an AI patch via the TUI, Git conflicts are inevitable. Instead of dumping the user into a raw terminal, `julesctl` will pop up a dedicated **Conflict Resolution Modal** offering two distinct tiers of solutions, avoiding overengineering by staying focused solely on AI workflow orchestration rather than building a full `gitui` clone.
+
+#### Tier 1: Classical 1-Click Operations
+- **`[O]` Keep Ours:** Preserve the local code for the conflicting lines, discarding the AI's patch in those specific areas.
+- **`[T]` Keep Theirs:** Overwrite the local code with the AI's newly generated lines for the conflict block.
+- **`[U]` Undo / Abort:** Quickly abort the cherry-pick (`git cherry-pick --abort`) to revert the working branch to a safe state, allowing the user to test another approach or review the code safely.
+- **`[M]` Manual Resolve via IDE:** Launch the raw file containing conflict markers (`<<<<<<< HEAD`, `=======`, `>>>>>>>`) directly in the user's preferred editor. `julesctl` will attempt to detect the current IDE environment (e.g., `$TERM_PROGRAM=vscode`) or rely on Git's `core.editor` to open the file seamlessly in Vim, VSCode, etc., utilizing sustainable OS-level fallbacks.
+
+#### Tier 2: AI-Assisted Auto-Resolution (The Killer Feature)
+- **Structured Prompt Generation:** `julesctl` will automatically parse the conflicting file and wrap the conflict markers (`<<<<<<<` to `>>>>>>>`) inside structured XML tags (e.g., `<local_code>` vs `<ai_code>`). This prevents LLM hallucination and clearly defines the context.
+- **`[R]` Resolve via AI:** The generated XML prompt will be dispatched to an active Jules Session to autonomously merge and resolve the logic.
+- **Target Selection & Clipboard:** The user can select *which* active Jules Session should receive this resolution prompt (e.g., the session that originally caused the conflict). Alternatively, a "Copy to Clipboard" feature allows the user to paste this structured XML prompt into an external web interface if desired.
