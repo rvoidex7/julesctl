@@ -183,3 +183,35 @@ When developing or refactoring features for `julesctl`, the following Rust optim
 - Ahenk will **never** be used to synchronize source code, local unpushed commits, or resolve merge conflicts between devices.
 - Both the PC and the Phone (Termux) are treated as "Thick Clients" with their own cloned Git repositories.
 - **Rule:** If a user wants to view or patch AI code on their phone, they must fetch it directly from the remote origin (`git fetch`) via the standard Git protocol. We do not reinvent code synchronization.
+
+## Settings & Configuration UI (Proposed Feature)
+
+To reduce the need for users to manually edit raw configuration files, `julesctl` will introduce a dedicated **Settings & Configuration UI** overlay.
+- This pane will provide a visual interface to manage the global state stored in the `~/.config/julesctl/` directory.
+- Users will be able to configure project-agnostic AI rules, update credentials securely, adjust UI preferences, and monitor **Ahenk Sync Statuses** directly from the TUI.
+- The interface will follow the responsive 2-pane principles, ensuring accessibility on both desktop and mobile/Termux environments.
+
+## Feature Elaborations & Future Additions
+
+### 1. Dual-Patching Specifics
+The Dual-Patching mechanism gives developers complete control over how AI code is integrated:
+- **Git Commits (Cherry-Picking):** Users can highlight an AI commit (🦑) in the Workflow View and press `a` to cherry-pick the formal Git commit into their local working branch. This preserves the AI's commit history and message.
+- **Raw API Artifacts (Patch Pulling):** Alternatively, users can fetch the raw diff directly from the Jules API `/artifacts` endpoint. This is useful for applying the exact current state of the code without pulling the entire Git history, ideal for quick testing or manual adjustments before formalizing a commit.
+
+### 2. Read-Only Observer Mode (`v`)
+Toggled via the `v` keybind, the Observer Mode allows users to safely inspect other branches and commits without altering their active working branch.
+- **Visual Indicators:** When active, the TUI will display distinct visual cues (e.g., a specific border color or a prominent status bar warning) to clearly indicate that the environment is locked.
+- **Functional Restrictions:** All state-modifying actions (like `a` for apply, or `n` for new session) will be disabled or hidden to prevent accidental changes.
+
+### 3. Fuzzy Search (`/`)
+Pressing `/` will open a fuzzy finder powered by `nucleo` and `ignore`.
+- This feature will allow blazing-fast navigation by searching through branch names, commit messages, and file contents across the repository and active workflows.
+
+### 4. Clipboard Fallbacks (`arboard`, OSC 52)
+To enhance usability across different terminal emulators and SSH sessions, `julesctl` will integrate robust clipboard support.
+- We will utilize `arboard` for native OS clipboard integration.
+- As a fallback for remote or headless environments, OSC 52 escape sequences will be implemented, allowing seamless copying of commit hashes, diff snippets, and chat messages.
+
+### 5. External `$EDITOR` Fallback
+For scenarios requiring complex manual conflict resolution or deep code review, `julesctl` will support launching an external editor.
+- Pressing a dedicated keybind will temporarily save the current patch or payload to disk, open the user's `$EDITOR` (e.g., `vim`, `nano`, `hx`), and automatically ingest the modified content upon exit.
