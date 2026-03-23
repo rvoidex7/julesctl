@@ -239,3 +239,22 @@ To provide a premium developer experience comparable to IntelliJ IDEA Ultimate, 
 A core architectural manifesto of `julesctl` is treating Jules AI remote branches (`🦑`) purely as an immutable **"Catalog of Commits"**. To prevent AI push/pull sync failures and preserve the pristine state of generated solutions:
 - **Strict Cherry-Picking (No Rebasing):** Users must never directly check out, modify, or `git rebase` a Jules AI branch. If a user wishes to extract the 3rd commit from a Jules session while skipping the first two, they must do so via non-destructive cherry-picking (`[A] Apply`) into their own isolated local working branch (`💻`). The AI branch remains permanently intact as a referenceable catalog.
 - **Isolated Parallel Testing via Git Worktrees:** To manage multiple complex conflict resolutions or parallel AI experiments simultaneously, `julesctl` will natively support `git worktree`. This allows developers to check out different local branches (each integrating different AI patches) into physically isolated, hidden directories (e.g., `~/.cache/julesctl/worktrees/`) linked to the same `.git` repository. This ensures zero cross-contamination when switching contexts or IDE windows.
+
+## Advanced Git Mechanics & Hybrid Architecture
+
+To prevent "overengineering" while achieving the extreme performance required for a modern terminal orchestrator, `julesctl` carefully delegates responsibilities across a hybrid stack of system tools and specialized Rust crates. This architecture draws inspiration from the state-management of massive Rust TUIs (like Codex CLI or Helix) while strictly avoiding their domain-specific logic (e.g., executing remote LLMs).
+
+### 1. The Hybrid Git Engine
+Replacing the system Git completely with native libraries is an anti-pattern that leads to unmaintainable network/SSH authentication code. Instead, `julesctl` splits Git operations:
+- **Lightning-Fast UI Reads (`gix` / `gitoxide`):** To achieve smooth, 60-FPS rendering of branch trees and thousands of commits without freezing the UI thread, `julesctl` will natively parse `.git` objects using `gitoxide`. This completely eliminates the slow OS subprocess overhead of shelling out for `git log` or `git status`.
+- **Reliable Writes & Networking (`std::process::Command`):** For executing `git fetch`, `git push`, complex rebases, or authenticating via SSH/HTTPS, `julesctl` will rely entirely on asynchronously shelling out to the user's system `git` executable. This ensures 100% compatibility with user configurations, proxy settings, and credential helpers.
+
+### 2. The Visual Patch Stack (Catalog Shopping)
+Because Jules AI remote branches (`🦑`) are treated purely as an immutable **"Catalog of Commits"**, users need a powerful UI to browse and extract patches into their local testing branches (`💻`):
+- **Keyboard-Driven Patch Shopping:** Instead of buggy mouse drag-and-drop, the TUI will feature a robust keyboard-driven "Interactive Cherry-Pick" interface. Users can navigate a Jules branch using `j/k`, press `Shift + Up/Down` to visually reorder commits, press `s` to squash two commits together, or press `d` to drop a bad patch.
+- Once the list is finalized in the UI, `julesctl` executes a silent, automated sequence of `git cherry-pick` commands to construct the exact desired state on the user's local branch, leaving the original AI branch completely untouched.
+
+### 3. Intelligent Conflict Parsing (Beyond Line-Diffs)
+When applying AI patches, Git's default line-based merge logic often flags false conflicts. `julesctl` will utilize advanced Rust libraries to silently resolve trivial collisions before ever bothering the user:
+- **`diffy` (3-Way Text Merging):** Will be used to power the "Magic Wand" feature, automatically merging chunks of code that are physically distant or logically non-overlapping (e.g., local imports added at the top vs. AI functions added at the bottom).
+- **`tree-sitter` (Semantic / AST Merging - Future Tier):** To truly understand code logic, `tree-sitter` bindings can be utilized to parse conflicting files as Abstract Syntax Trees (AST). This allows `julesctl` to determine if a collision is purely structural (e.g., an AI adding a parameter to a function the user just renamed) and safely extract context for the Tier 2 AI-Assisted XML conflict prompt.
