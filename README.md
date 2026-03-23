@@ -4,6 +4,10 @@
 
 `julesctl` transforms your local terminal into a powerful branch and patch manager for Jules AI. Instead of manually copying code from a browser or constantly switching branches, `julesctl` lets you spin up multiple parallel Jules sessions (AI developers) from any commit, visualize their changes as a Git tree, and seamlessly cherry-pick, test, or revert their patches right from your editor.
 
+## Documentation & Architectural Manifesto
+For a comprehensive overview of our architectural goals, including UI layout, Git-first branching strategies, conflict resolution tiers, and cross-device syncing via Ahenk, please see our detailed documentation:
+* [Roadmap & Architectural Index](docs/ROADMAP.md)
+
 ## The Paradigm: Git-First Workflow
 
 `julesctl` abandons the traditional "chat-bot" UI as its primary interface.
