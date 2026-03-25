@@ -17,7 +17,7 @@ pub struct Session {
 impl Session {
     pub fn id(&self) -> &str {
         // name format: "sessions/14550388554331055113"
-        self.name.split('/').last().unwrap_or(&self.name)
+        self.name.split('/').next_back().unwrap_or(&self.name)
     }
 }
 
