@@ -15,6 +15,12 @@ pub struct DemoAdapter {
     contacts: Vec<Contact>,
 }
 
+impl Default for DemoAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DemoAdapter {
     pub fn new() -> Self {
         let mut adapter = Self {

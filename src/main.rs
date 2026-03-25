@@ -222,7 +222,7 @@ async fn main() -> Result<()> {
             let mut active_tab_index = mutable_cfg
                 .repos
                 .iter()
-                .position(|r| PathBuf::from(&r.path) == cwd)
+                .position(|r| PathBuf::from(&r.path).as_path() == cwd)
                 .unwrap_or(0);
 
             loop {

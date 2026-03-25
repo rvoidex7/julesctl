@@ -193,9 +193,7 @@ where
                                 }
                             }
                             KeyCode::Up | KeyCode::Char('k') => {
-                                if selected_chat > 0 {
-                                    selected_chat -= 1;
-                                }
+                                selected_chat = selected_chat.saturating_sub(1);
                             }
                             _ => {}
                         }

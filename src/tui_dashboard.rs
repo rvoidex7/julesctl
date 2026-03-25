@@ -359,21 +359,21 @@ where
                             // ~26 cols                  ~3 cols
                             //                             29-40       41-53        54-69           70-87             88-98
                             let col = mouse_event.column;
-                            if col >= 29 && col <= 40 {
+                            if (29..=40).contains(&col) {
                                 // [A] Apply
                                 if !commits.is_empty() {
                                     action_log =
                                         apply_cherry_pick(&repo_path, &commits[selected_idx].sha)
                                             .unwrap_or_else(|e| format!("Error: {}", e));
                                 }
-                            } else if col >= 41 && col <= 53 {
+                            } else if (41..=53).contains(&col) {
                                 // [R] Revert
                                 if !commits.is_empty() {
                                     action_log =
                                         revert_commit(&repo_path, &commits[selected_idx].sha)
                                             .unwrap_or_else(|e| format!("Error: {}", e));
                                 }
-                            } else if col >= 54 && col <= 69 {
+                            } else if (54..=69).contains(&col) {
                                 // [C] Open Chat
                                 if !commits.is_empty() {
                                     if let BranchType::JulesSession(ref id) =
@@ -389,17 +389,17 @@ where
                                                 .to_string();
                                     }
                                 }
-                            } else if col >= 70 && col <= 83 {
+                            } else if (70..=83).contains(&col) {
                                 // [O] Checkout
                                 if !commits.is_empty() {
                                     return Ok(DashboardAction::CheckoutBranch(
                                         commits[selected_idx].sha.clone(),
                                     ));
                                 }
-                            } else if col >= 84 && col <= 100 {
+                            } else if (84..=100).contains(&col) {
                                 // [N] New Session
                                 return Ok(DashboardAction::CreateNewSession);
-                            } else if col >= 101 && col <= 110 {
+                            } else if (101..=110).contains(&col) {
                                 // [Q] Quit
                                 return Ok(DashboardAction::Quit);
                             }

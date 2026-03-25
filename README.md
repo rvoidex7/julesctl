@@ -1,60 +1,65 @@
-# julesctl
+<div align="center">
+  <img src="https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
+  <img src="https://img.shields.io/github/actions/workflow/status/rvoidex7/julesctl/ci.yml?style=for-the-badge&logo=githubactions&logoColor=white" alt="Build Status">
+  <img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge" alt="License">
+  <img src="https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows%20%7C%20Termux-lightgrey?style=for-the-badge" alt="Platforms">
 
-> Jules AI local workflow manager — a Git-first, visual orchestrator for your AI coding sessions.
+  <h1>julesctl</h1>
+  <p><strong>A Professional Git-First Workflow Manager for Jules AI</strong></p>
+  <p><em>Stop chatting with bots. Start orchestrating your code.</em></p>
+</div>
 
-`julesctl` transforms your local terminal into a powerful branch and patch manager for Jules AI. Instead of manually copying code from a browser or constantly switching branches, `julesctl` lets you spin up multiple parallel Jules sessions (AI developers) from any commit, visualize their changes as a Git tree, and seamlessly cherry-pick, test, or revert their patches right from your editor.
+---
 
-## Documentation & Architectural Manifesto
-For a comprehensive overview of our architectural goals, including UI layout, Git-first branching strategies, conflict resolution tiers, and cross-device syncing via Ahenk, please see our detailed documentation:
-* [Roadmap & Architectural Index](docs/ROADMAP.md)
+## 🚀 The Jules Experience, Reimagined
 
-## The Paradigm: Git-First Workflow
+The official Jules web UI treats AI sessions as a flat, conversational history. As your projects scale, finding the right code, managing parallel experiments, and resolving conflicting suggestions becomes a chaotic mess of copy-pasting.
 
-`julesctl` abandons the traditional "chat-bot" UI as its primary interface.
+`julesctl` completely abandons the traditional "chatbot" paradigm. We believe AI coding assistants should be managed with the same rigorous, structured tools developers use for human collaboration: **Git**.
 
-Instead, it treats Jules AI sessions as **Git Branches**.
-When you start a task, Jules writes code and commits it to a remote branch (`jules/task-...`).
-`julesctl` visually graphs these branches alongside your local work.
+By treating every Jules AI session as a dedicated Git branch (`🦑`), `julesctl` transforms your terminal into a powerful, visual orchestration dashboard. It groups your sessions into logical **Workflows**, displaying them as a clean hierarchical tree, allowing you to seamlessly shop for patches, resolve conflicts, and merge AI-generated code directly into your local environment.
 
-### Features
-1. **Visual Git Workflow:** See exactly where your local code is, where Jules branched off, and what commits Jules has made (marked with 🦑).
-2. **Patch Picker:** Select any Jules commit in the TUI to instantly preview the `diff`.
-3. **Seamless Integration:** Apply (`cherry-pick`), revert, or merge Jules' code without leaving the dashboard.
-4. **Context-Aware Chat:** Need to talk to Jules about a specific branch? Press `C` on a Jules commit to launch a scoped `ratatui` chat interface (`cli-chat-rs`) that understands the exact context of that branch.
-5. **Moddable Rules:** Fully compatible with tools like Get-Shit-Done (GSD). Automatically injects `.gsd/context.md` or `AGENTS.md` into new Jules sessions.
+---
 
-## Installation
+## ✨ Why `julesctl` is Different
 
-```bash
-git clone https://github.com/rvoidex7/julesctl
-cd julesctl
-cargo install --path .
-```
+### 1. The Git-First Workflow Paradigm
+There is no "manual chat mode" in `julesctl`. Every interaction is contextualized within a local repository **Workflow**.
+*   **Infinite Parallelism:** Spawn a "Planner" session, and from its branch, manually spin off ten parallel "Worker" sessions. `julesctl` tracks the exact origin and divergence of every AI thought process.
+*   **Visualizing the Chaos:** The built-in TUI maps your local working branch alongside Jules' remote branches (`jules/task-...`). You instantly see where the AI branched off, what it committed (`🦑`), and how it relates to your local changes (`💻`).
+*   **Immutable AI Branches:** We treat Jules branches as a pristine "Catalog of Commits." You never rebase or break the AI's sync. Instead, you cherry-pick exactly what you need.
 
-## Setup & Usage
+### 2. The Visual Patch Stack (Interactive Cherry-Picking)
+Say goodbye to messy web-to-IDE copy-pasting. `julesctl` features a keyboard-driven (Vim/Arrow keys) interface to shop for AI code:
+*   Preview in-memory diffs instantly without slow disk operations.
+*   **Dual-Patching:** Choose to apply (`[A]`) formalized Git commits (cherry-picking) or pull raw API artifact patches for rapid local testing.
+*   Reorder, squash (`s`), or drop (`d`) AI commits directly from the TUI before merging them into your isolated `git worktree`.
 
-```bash
-cd my-project
-julesctl init
-```
-This creates `.config/julesctl/config.toml` (and global rules in `~/.config/julesctl/rules/`).
+### 3. The 4-Tier Conflict Resolution Framework
+When an AI patch collides with your local code, `julesctl` doesn't just dump you into a broken file. Our robust framework handles it:
+*   **Tier 1 (1-Click Triage):** Instantly Keep Ours `[O]`, Keep Theirs `[T]`, Undo `[U]`, or open your default `$EDITOR` (`[M]`).
+*   **Tier 2 (AI-Assisted Auto-Merge):** The killer feature. `julesctl` wraps conflict markers (`<<<<<<<` vs `=======`) in strict XML and dispatches them back to Jules for autonomous resolution.
+*   **Tier 3 (Enterprise Mechanics):** Background integration with `git rerere` (Reuse Recorded Resolution) and Rust libraries (`diffy`) silently auto-merges non-overlapping logic before you even see a conflict prompt.
+*   **Tier 4 (Safe Worktrees):** Test conflicting AI ideas simultaneously in hidden `git worktree` directories without contaminating your primary codebase.
 
-Run the dashboard:
-```bash
-julesctl
-```
+### 4. A Native, Blazing-Fast TUI Architecture
+*   **Hybrid Git Engine:** We use native Rust libraries (`gitoxide`) to render massive commit trees at 60 FPS without blocking the UI thread, while intelligently delegating complex network operations to the system's `git` executable.
+*   **Responsive & Touch-First:** Fully adaptive layout. Side-by-side panes on Desktop PC; stacked panes on mobile Android/Termux environments, with complete Ratatui mouse/touch support.
+*   **Scoped Chat (`cli-chat-rs`):** When you need to talk to Jules, press `C` on a commit. A decoupled, full-screen overlay opens, injected *only* with the context of that specific branch branch, maintaining maximum performance.
 
-### The Dashboard UI
+### 5. Cross-Device Syncing via Ahenk
+Transition seamlessly from your Desktop to your phone via Termux. `julesctl` uses P2P [Ahenk](https://github.com/Appaholics/Ahenk) sync to securely transfer your global UI settings, active workflow tabs, and API cache (`~/.config/julesctl/`) across devices, while strictly leaving code synchronization to the native Git protocol.
 
-- **Left Panel (Git Graph):** Displays your current workflow's commits.
-  - 🐱 = Github/Remote commit
-  - 🦑 = Jules AI session branch
-  - (No emoji) = Local unpushed commit
-- **Right Panel (Top):** Shows the `diff` (patch preview) and commit message for the selected node.
-- **Right Panel (Bottom):** Available actions (`[A] Apply`, `[R] Revert`, `[C] Open Chat`, `[N] New Session`).
+---
 
-## TUI Dashboard and cli-chat-rs Integration
+## 📚 Architectural Manifesto & Documentation
 
-Running `julesctl` with no arguments launches the **Project Dashboard**. This dashboard scopes directly to your currently active project directory and presents the visual Git tree.
+`julesctl` is built on a strict, highly considered architectural foundation. We do not accept features that violate our core principles (e.g., adding heavy full-terminal dependencies, blocking UI threads, or abandoning the Git-first model).
 
-From this Dashboard, you can select an active Jules task (🦑). `julesctl` will then spin up the `cli-chat-rs` generic TUI specifically scoped to that single session. This ensures that `cli-chat-rs` remains a lightweight and decoupled chat framework utilizing `ratatui`, whilst `julesctl` manages the complex branch orchestration.
+For a deep dive into how `julesctl` works under the hood, read our complete documentation index:
+
+👉 **[ROADMAP & Architectural Manifesto](docs/ROADMAP.md)**
+
+---
+
+*(Note: `julesctl` is currently in active development. Installation and binary distribution instructions will be provided in a future release.)*
