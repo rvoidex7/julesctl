@@ -70,7 +70,7 @@ where
     let mut workflow_only = true;
 
     let mut commits: Vec<GitCommit> = Vec::new();
-    if let Ok(fetched_commits) = get_workflow_commits(&repo_path, workflow_only) {
+    if let Ok(fetched_commits) = get_workflow_commits(&repo_path, workflow_only).await {
         commits = fetched_commits;
     }
 
@@ -90,7 +90,7 @@ where
             current_diff_sha = commits[selected_idx].sha.clone();
             diff_scroll_offset = 0; // Reset scroll on new commit
             current_diff =
-                get_commit_diff(&repo_path, &current_diff_sha).unwrap_or_else(|e| e.to_string());
+                get_commit_diff(&repo_path, &current_diff_sha).await.unwrap_or_else(|e| e.to_string());
         }
 
         terminal.draw(|f| {
@@ -294,18 +294,20 @@ where
                     KeyCode::Char('a') | KeyCode::Char('A') => {
                         if !commits.is_empty() {
                             action_log = apply_cherry_pick(&repo_path, &commits[selected_idx].sha)
+                                .await
                                 .unwrap_or_else(|e| format!("Error: {}", e));
                         }
                     }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
                         if !commits.is_empty() {
                             action_log = revert_commit(&repo_path, &commits[selected_idx].sha)
+                                .await
                                 .unwrap_or_else(|e| format!("Error: {}", e));
                         }
                     }
                     KeyCode::Char('f') | KeyCode::Char('F') => {
                         workflow_only = !workflow_only;
-                        if let Ok(fetched_commits) = get_workflow_commits(&repo_path, workflow_only)
+                        if let Ok(fetched_commits) = get_workflow_commits(&repo_path, workflow_only).await
                         {
                             commits = fetched_commits;
                             selected_idx = 0;
@@ -364,13 +366,14 @@ where
                                 if !commits.is_empty() {
                                     action_log =
                                         apply_cherry_pick(&repo_path, &commits[selected_idx].sha)
+                                            .await
                                             .unwrap_or_else(|e| format!("Error: {}", e));
                                 }
                             } else if (41..=53).contains(&col) {
                                 // [R] Revert
                                 if !commits.is_empty() {
                                     action_log =
-                                        revert_commit(&repo_path, &commits[selected_idx].sha)
+                                        revert_commit(&repo_path, &commits[selected_idx].sha).await
                                             .unwrap_or_else(|e| format!("Error: {}", e));
                                 }
                             } else if (54..=69).contains(&col) {
