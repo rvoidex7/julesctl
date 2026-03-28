@@ -6,6 +6,10 @@ pub struct Config {
     pub api_key: String,
     #[serde(default)]
     pub repos: Vec<RepoConfig>,
+
+    // Global active tabs for Workflow view
+    #[serde(default)]
+    pub active_tabs: Vec<usize>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -19,7 +23,7 @@ pub struct RepoConfig {
     #[serde(default)]
     pub post_pull: String,
 
-    // We store sessions here just for UI labeling purposes
+    // We store sessions here just for UI labeling purposes and hierarchy
     #[serde(default)]
     pub sessions: Vec<JulesSession>,
 }
@@ -28,6 +32,10 @@ pub struct RepoConfig {
 pub struct JulesSession {
     pub session_id: String,
     pub label: String,
+
+    // Hierarchical mapping of Jules sessions (Session A spawned Session B)
+    #[serde(default)]
+    pub parent_id: Option<String>,
 }
 
 impl Config {
