@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use std::path::Path;
-use std::process::Command;
+use tokio::process::Command;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BranchType {
@@ -18,11 +18,13 @@ pub struct GitCommit {
     pub graph_prefix: String,
 }
 
-pub fn fetch_origin(repo_path: &Path) -> Result<()> {
+/// Heavy network operations remain shell commands
+pub async fn fetch_origin(repo_path: &Path) -> Result<()> {
     let output = Command::new("git")
         .current_dir(repo_path)
         .args(["fetch", "origin"])
         .output()
+        .await
         .context("Failed to run git fetch")?;
 
     if !output.status.success() {
@@ -32,12 +34,13 @@ pub fn fetch_origin(repo_path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn get_workflow_commits(repo_path: &Path, workflow_only: bool) -> Result<Vec<GitCommit>> {
+pub async fn get_workflow_commits(repo_path: &Path, workflow_only: bool) -> Result<Vec<GitCommit>> {
     // Check if git is initialized and has commits
     let check = Command::new("git")
         .current_dir(repo_path)
         .args(["rev-parse", "HEAD"])
-        .output();
+        .output()
+        .await;
 
     if check.is_err() || !check.unwrap().status.success() {
         return Ok(Vec::new()); // No commits or not a git repo
@@ -67,6 +70,7 @@ pub fn get_workflow_commits(repo_path: &Path, workflow_only: bool) -> Result<Vec
         .current_dir(repo_path)
         .args(&args)
         .output()
+        .await
         .context("Failed to run git log")?;
 
     if !output.status.success() {
@@ -156,11 +160,12 @@ pub fn get_workflow_commits(repo_path: &Path, workflow_only: bool) -> Result<Vec
     Ok(commits)
 }
 
-pub fn get_commit_diff(repo_path: &Path, sha: &str) -> Result<String> {
+pub async fn get_commit_diff(repo_path: &Path, sha: &str) -> Result<String> {
     let output = Command::new("git")
         .current_dir(repo_path)
         .args(["show", "--color=always", sha])
-        .output()?;
+        .output()
+        .await?;
 
     if !output.status.success() {
         return Ok("Failed to get diff for this commit.".to_string());
@@ -169,11 +174,12 @@ pub fn get_commit_diff(repo_path: &Path, sha: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-pub fn apply_cherry_pick(repo_path: &Path, sha: &str) -> Result<String> {
+pub async fn apply_cherry_pick(repo_path: &Path, sha: &str) -> Result<String> {
     let output = Command::new("git")
         .current_dir(repo_path)
         .args(["cherry-pick", sha])
-        .output()?;
+        .output()
+        .await?;
 
     if output.status.success() {
         Ok(format!("Successfully applied commit {}", sha))
@@ -182,18 +188,20 @@ pub fn apply_cherry_pick(repo_path: &Path, sha: &str) -> Result<String> {
         let _ = Command::new("git")
             .current_dir(repo_path)
             .args(["cherry-pick", "--abort"])
-            .output();
+            .output()
+            .await;
 
         let err = String::from_utf8_lossy(&output.stderr);
         Err(anyhow::anyhow!("Conflict applying {}:\n{}", sha, err))
     }
 }
 
-pub fn revert_commit(repo_path: &Path, sha: &str) -> Result<String> {
+pub async fn revert_commit(repo_path: &Path, sha: &str) -> Result<String> {
     let output = Command::new("git")
         .current_dir(repo_path)
         .args(["revert", "--no-edit", sha])
-        .output()?;
+        .output()
+        .await?;
 
     if output.status.success() {
         Ok(format!("Successfully reverted commit {}", sha))
@@ -201,18 +209,20 @@ pub fn revert_commit(repo_path: &Path, sha: &str) -> Result<String> {
         let _ = Command::new("git")
             .current_dir(repo_path)
             .args(["revert", "--abort"])
-            .output();
+            .output()
+            .await;
 
         let err = String::from_utf8_lossy(&output.stderr);
         Err(anyhow::anyhow!("Failed to revert {}:\n{}", sha, err))
     }
 }
 
-pub fn checkout_branch(repo_path: &Path, branch_name_or_sha: &str) -> Result<String> {
+pub async fn checkout_branch(repo_path: &Path, branch_name_or_sha: &str) -> Result<String> {
     let output = Command::new("git")
         .current_dir(repo_path)
         .args(["checkout", branch_name_or_sha])
-        .output()?;
+        .output()
+        .await?;
 
     if output.status.success() {
         Ok(format!("Successfully checked out {}", branch_name_or_sha))
