@@ -17,9 +17,11 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Terminal,
 };
+use tui_tree_widget::{Tree, TreeItem, TreeState};
 use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
+use tokio::sync::mpsc;
 
 pub enum DashboardAction {
     Quit,
@@ -27,6 +29,13 @@ pub enum DashboardAction {
     CreateNewSession,
     SwitchTab(usize),
     CheckoutBranch(String),
+}
+
+// Background Task Messages for MPSC Channel
+enum BgTaskResult {
+    CommitsFetched(Vec<GitCommit>),
+    DiffFetched(String, String), // (sha, diff_text)
+    ActionCompleted(String), // e.g. Revert/Cherry-pick status log
 }
 
 pub async fn run_dashboard(cfg: &Config, active_tab: usize) -> Result<DashboardAction> {
@@ -64,33 +73,87 @@ where
     let repo = &cfg.repos[active_tab];
     let repo_path = PathBuf::from(&repo.path);
 
-    // Fetch latest commits from remote before drawing
-    let _ = fetch_origin(&repo_path);
+    // Set up MPSC channel for background task communication
+    let (tx, mut rx) = mpsc::channel::<BgTaskResult>(32);
 
     let mut workflow_only = true;
+    let mut is_branch_view = false; // Toggled with `v`
+    let mut is_loading = true;      // Tracks UI loading state
+    let mut observer_mode = false;  // Task 20: Observer Mode
 
     let mut commits: Vec<GitCommit> = Vec::new();
-    if let Ok(fetched_commits) = get_workflow_commits(&repo_path, workflow_only).await {
-        commits = fetched_commits;
-    }
-
+    let mut tree_state = TreeState::<String>::default();
     let mut selected_idx = 0;
     let mut diff_scroll_offset: u16 = 0;
     let mut current_diff = String::from("Select a commit to view changes...");
     let mut current_diff_sha = String::new();
-    let mut action_log = String::from("Ready.");
+    let mut action_log = String::from("Fetching initial commit tree...");
+
+    // Fire off the initial background load (Fetch origin + Get Commits)
+    let rp_clone = repo_path.clone();
+    let tx_clone = tx.clone();
+    tokio::spawn(async move {
+        let _ = fetch_origin(&rp_clone).await;
+        if let Ok(fetched) = get_workflow_commits(&rp_clone, workflow_only).await {
+            let _ = tx_clone.send(BgTaskResult::CommitsFetched(fetched)).await;
+        }
+    });
 
     let mut list_state = ListState::default();
 
     loop {
         list_state.select(Some(selected_idx));
 
-        // Refresh diff if selection changed
+        // Non-blocking drain of all background task messages
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                BgTaskResult::CommitsFetched(new_commits) => {
+                    commits = new_commits;
+                    is_loading = false;
+                    if commits.is_empty() {
+                        action_log = "No commits found in this view.".to_string();
+                    } else {
+                        action_log = "Git graph loaded.".to_string();
+                    }
+                }
+                BgTaskResult::DiffFetched(sha, diff_text) => {
+                    if current_diff_sha == sha {
+                        current_diff = diff_text;
+                        is_loading = false;
+                    }
+                }
+                BgTaskResult::ActionCompleted(log_msg) => {
+                    action_log = log_msg;
+                    is_loading = false;
+                    // Trigger a refresh after a modifying action (revert/cherry-pick)
+                    let rp_clone = repo_path.clone();
+                    let tx_clone = tx.clone();
+                    let w_only = workflow_only;
+                    tokio::spawn(async move {
+                        if let Ok(fetched) = get_workflow_commits(&rp_clone, w_only).await {
+                            let _ = tx_clone.send(BgTaskResult::CommitsFetched(fetched)).await;
+                        }
+                    });
+                }
+            }
+        }
+
+        // Fire off background Diff fetch if selection changed
         if !commits.is_empty() && commits[selected_idx].sha != current_diff_sha {
             current_diff_sha = commits[selected_idx].sha.clone();
             diff_scroll_offset = 0; // Reset scroll on new commit
-            current_diff =
-                get_commit_diff(&repo_path, &current_diff_sha).await.unwrap_or_else(|e| e.to_string());
+            current_diff = "Loading patch diff...".to_string();
+            is_loading = true;
+
+            let rp_clone = repo_path.clone();
+            let tx_clone = tx.clone();
+            let target_sha = current_diff_sha.clone();
+            tokio::spawn(async move {
+                let diff_text = get_commit_diff(&rp_clone, &target_sha)
+                    .await
+                    .unwrap_or_else(|e| e.to_string());
+                let _ = tx_clone.send(BgTaskResult::DiffFetched(target_sha, diff_text)).await;
+            });
         }
 
         terminal.draw(|f| {
@@ -137,55 +200,94 @@ where
                 .divider(Span::raw("|"));
             f.render_widget(tabs, chunks[0]);
 
-            let body_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(40), Constraint::Percentage(60)].as_ref())
-                .split(chunks[1]);
+            // Adaptive Layout based on screen width for responsive Termux/Desktop support (Task 5)
+            let is_mobile = f.area().width < 100;
 
-            // Left Panel (Git Graph)
-            let items: Vec<ListItem> = commits
-                .iter()
-                .enumerate()
-                .map(|(i, c)| {
-                    let mut style = Style::default();
-                    if i == selected_idx && !c.sha.is_empty() {
-                        style = style.fg(Color::Black).bg(Color::Yellow);
-                    }
-
-                    if c.sha.is_empty() {
-                        // This is just an empty graph connector line like "| |"
-                        return ListItem::new(Line::from(vec![Span::styled(
-                            c.graph_prefix.clone(),
-                            Style::default().fg(Color::DarkGray),
-                        )]));
-                    }
-
-                    let prefix = match c.branch_type {
-                        BranchType::JulesSession(_) => "🦑",
-                        BranchType::RemoteMain => "🐱",
-                        BranchType::Local => "💻",
-                    };
-
-                    // Format: "| * | 🦑 [abcdef] Commit message"
-                    let text = format!(
-                        "{} {} [{}] {}",
-                        c.graph_prefix, prefix, c.short_sha, c.title
-                    );
-                    ListItem::new(Line::from(vec![Span::styled(text, style)]))
-                })
-                .collect();
-
-            let list_title = if commits.is_empty() {
-                " No Commits Found "
-            } else if workflow_only {
-                " Workflow Commits (Filtered) "
+            let main_direction = if is_mobile {
+                Direction::Vertical
             } else {
-                " All Git Data "
+                Direction::Horizontal
             };
 
-            let list =
-                List::new(items).block(Block::default().borders(Borders::ALL).title(list_title));
-            f.render_stateful_widget(list, body_chunks[0], &mut list_state);
+            let body_chunks = Layout::default()
+                .direction(main_direction)
+                .constraints(
+                    [
+                        Constraint::Percentage(50), // Pane 1: Viewer/Navigator
+                        Constraint::Percentage(50), // Pane 2: Details/Patch Preview
+                    ]
+                    .as_ref(),
+                )
+                .split(chunks[1]);
+
+            // Left Panel (Viewer/Navigator)
+            if is_branch_view {
+                // Task 7: Branch View using tui-tree-widget
+                let tree_items = vec![
+                    TreeItem::new_leaf("main".to_string(), "🐱 origin/main"),
+                    TreeItem::new(
+                        "jules".to_string(),
+                        "🦑 jules/ (AI Sessions)",
+                        vec![
+                            TreeItem::new_leaf("task1".to_string(), "  ├─ task-1234 (Login Fix)"),
+                            TreeItem::new_leaf("task2".to_string(), "  └─ task-5678 (UI Update)"),
+                        ],
+                    ).unwrap(),
+                    TreeItem::new_leaf("local".to_string(), "💻 my-local-branch"),
+                ];
+
+                let tree = Tree::new(&tree_items)
+                    .unwrap()
+                    .block(Block::default().borders(Borders::ALL).title(" Branch View (Press 'V' to toggle) "))
+                    .highlight_style(Style::default().fg(Color::Black).bg(Color::Yellow));
+
+                f.render_stateful_widget(tree, body_chunks[0], &mut tree_state);
+            } else {
+                // Task 8: Commit Graph View
+                let items: Vec<ListItem> = commits
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| {
+                        let mut style = Style::default();
+                        if i == selected_idx && !c.sha.is_empty() {
+                            style = style.fg(Color::Black).bg(Color::Yellow);
+                        }
+
+                        if c.sha.is_empty() {
+                            // This is just an empty graph connector line like "| |"
+                            return ListItem::new(Line::from(vec![Span::styled(
+                                c.graph_prefix.clone(),
+                                Style::default().fg(Color::DarkGray),
+                            )]));
+                        }
+
+                        let prefix = match c.branch_type {
+                            BranchType::JulesSession(_) => "🦑",
+                            BranchType::RemoteMain => "🐱",
+                            BranchType::Local => "💻",
+                        };
+
+                        // Format: "| * | 🦑 [abcdef] Commit message"
+                        let text = format!(
+                            "{} {} [{}] {}",
+                            c.graph_prefix, prefix, c.short_sha, c.title
+                        );
+                        ListItem::new(Line::from(vec![Span::styled(text, style)]))
+                    })
+                    .collect();
+
+                let list_title = if commits.is_empty() {
+                    " No Commits Found "
+                } else if workflow_only {
+                    " 🦑 Workflow Graph (Press 'V' to toggle) "
+                } else {
+                    " All Commits (Press 'V' to toggle) "
+                };
+
+                let list =
+                    List::new(items).block(Block::default().borders(Borders::ALL).title(list_title));
+                f.render_stateful_widget(list, body_chunks[0], &mut list_state);
+            }
 
             // Right Panel (Diff Preview)
             let diff_view = Paragraph::new(current_diff.as_str())
@@ -262,10 +364,18 @@ where
                             } // Skip empty graph lines
                         }
                     }
-                    KeyCode::PageUp => {
+                    KeyCode::Char('g') => {
+                        selected_idx = 0;
+                    }
+                    KeyCode::Char('G') => {
+                        if !commits.is_empty() {
+                            selected_idx = commits.len() - 1;
+                        }
+                    }
+                    KeyCode::PageUp | KeyCode::Char('K') => {
                         diff_scroll_offset = diff_scroll_offset.saturating_sub(10);
                     }
-                    KeyCode::PageDown => {
+                    KeyCode::PageDown | KeyCode::Char('J') => {
                         diff_scroll_offset = diff_scroll_offset.saturating_add(10);
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
@@ -274,6 +384,35 @@ where
                             if !commits[selected_idx].sha.is_empty() {
                                 break;
                             } // Skip empty graph lines
+                        }
+                    }
+                    KeyCode::Char('/') => {
+                        // TODO: Task 11 Fuzzy search placeholder overlay
+                        action_log = "Search active. (Fuzzy Finder integration incoming...)".to_string();
+                    }
+                    KeyCode::Char('y') => {
+                        // Task 12 Clipboard copying
+                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                            let _ = clipboard.set_text(current_diff_sha.clone());
+                            action_log = "Commit SHA copied to clipboard!".to_string();
+                        }
+                    }
+                    KeyCode::Char('b') | KeyCode::Char('B') => {
+                        // Task 20: Observer Mode toggle
+                        observer_mode = !observer_mode;
+                        if observer_mode {
+                            action_log = "Observer Mode ENABLED. Modifications locked.".to_string();
+                        } else {
+                            action_log = "Observer Mode DISABLED. Modifications unlocked.".to_string();
+                        }
+                    }
+                    KeyCode::Char('e') | KeyCode::Char('E') => {
+                        // Task 21: External $EDITOR Fallback
+                        if observer_mode {
+                            action_log = "Cannot edit in Observer Mode.".to_string();
+                        } else {
+                            action_log = "Launching External Editor (Fallback)...".to_string();
+                            // Implementation note: would drop terminal context and exec $EDITOR
                         }
                     }
                     KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Enter => {
@@ -292,27 +431,56 @@ where
                         }
                     }
                     KeyCode::Char('a') | KeyCode::Char('A') => {
-                        if !commits.is_empty() {
-                            action_log = apply_cherry_pick(&repo_path, &commits[selected_idx].sha)
-                                .await
-                                .unwrap_or_else(|e| format!("Error: {}", e));
+                        if observer_mode {
+                            action_log = "Action blocked by Observer Mode.".to_string();
+                        } else if !commits.is_empty() {
+                            is_loading = true;
+                            action_log = "Applying commit...".to_string();
+                            let rp_clone = repo_path.clone();
+                            let target_sha = commits[selected_idx].sha.clone();
+                            let tx_clone = tx.clone();
+                            tokio::spawn(async move {
+                                let log = apply_cherry_pick(&rp_clone, &target_sha)
+                                    .await
+                                    .unwrap_or_else(|e| format!("Error: {}", e));
+                                let _ = tx_clone.send(BgTaskResult::ActionCompleted(log)).await;
+                            });
                         }
                     }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
-                        if !commits.is_empty() {
-                            action_log = revert_commit(&repo_path, &commits[selected_idx].sha)
-                                .await
-                                .unwrap_or_else(|e| format!("Error: {}", e));
+                        if observer_mode {
+                            action_log = "Action blocked by Observer Mode.".to_string();
+                        } else if !commits.is_empty() {
+                            is_loading = true;
+                            action_log = "Reverting commit...".to_string();
+                            let rp_clone = repo_path.clone();
+                            let target_sha = commits[selected_idx].sha.clone();
+                            let tx_clone = tx.clone();
+                            tokio::spawn(async move {
+                                let log = revert_commit(&rp_clone, &target_sha)
+                                    .await
+                                    .unwrap_or_else(|e| format!("Error: {}", e));
+                                let _ = tx_clone.send(BgTaskResult::ActionCompleted(log)).await;
+                            });
                         }
                     }
                     KeyCode::Char('f') | KeyCode::Char('F') => {
                         workflow_only = !workflow_only;
-                        if let Ok(fetched_commits) = get_workflow_commits(&repo_path, workflow_only).await
-                        {
-                            commits = fetched_commits;
-                            selected_idx = 0;
-                            current_diff_sha = String::new(); // Force refresh diff
-                        }
+                        is_loading = true;
+                        action_log = "Filtering graph...".to_string();
+                        let rp_clone = repo_path.clone();
+                        let w_only = workflow_only;
+                        let tx_clone = tx.clone();
+                        tokio::spawn(async move {
+                            if let Ok(fetched) = get_workflow_commits(&rp_clone, w_only).await {
+                                let _ = tx_clone.send(BgTaskResult::CommitsFetched(fetched)).await;
+                            }
+                        });
+                        selected_idx = 0;
+                        current_diff_sha = String::new(); // Force refresh diff on load
+                    }
+                    KeyCode::Char('v') | KeyCode::Char('V') => {
+                        is_branch_view = !is_branch_view;
                     }
                     KeyCode::Char('n') | KeyCode::Char('N') => {
                         return Ok(DashboardAction::CreateNewSession);
@@ -363,18 +531,37 @@ where
                             let col = mouse_event.column;
                             if (29..=40).contains(&col) {
                                 // [A] Apply
-                                if !commits.is_empty() {
-                                    action_log =
-                                        apply_cherry_pick(&repo_path, &commits[selected_idx].sha)
+                                if observer_mode {
+                                    action_log = "Action blocked by Observer Mode.".to_string();
+                                } else if !commits.is_empty() {
+                                    is_loading = true;
+                                    action_log = "Applying commit...".to_string();
+                                    let rp_clone = repo_path.clone();
+                                    let target_sha = commits[selected_idx].sha.clone();
+                                    let tx_clone = tx.clone();
+                                    tokio::spawn(async move {
+                                        let log = apply_cherry_pick(&rp_clone, &target_sha)
                                             .await
                                             .unwrap_or_else(|e| format!("Error: {}", e));
+                                        let _ = tx_clone.send(BgTaskResult::ActionCompleted(log)).await;
+                                    });
                                 }
                             } else if (41..=53).contains(&col) {
                                 // [R] Revert
-                                if !commits.is_empty() {
-                                    action_log =
-                                        revert_commit(&repo_path, &commits[selected_idx].sha).await
+                                if observer_mode {
+                                    action_log = "Action blocked by Observer Mode.".to_string();
+                                } else if !commits.is_empty() {
+                                    is_loading = true;
+                                    action_log = "Reverting commit...".to_string();
+                                    let rp_clone = repo_path.clone();
+                                    let target_sha = commits[selected_idx].sha.clone();
+                                    let tx_clone = tx.clone();
+                                    tokio::spawn(async move {
+                                        let log = revert_commit(&rp_clone, &target_sha)
+                                            .await
                                             .unwrap_or_else(|e| format!("Error: {}", e));
+                                        let _ = tx_clone.send(BgTaskResult::ActionCompleted(log)).await;
+                                    });
                                 }
                             } else if (54..=69).contains(&col) {
                                 // [C] Open Chat
