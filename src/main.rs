@@ -306,7 +306,7 @@ async fn main() -> Result<()> {
                                         "✓".green(),
                                         session.id()
                                     );
-                                    let _ = git::graph::fetch_origin(std::path::Path::new(&r.path));
+                                    let _ = git::graph::fetch_origin(std::path::Path::new(&r.path)).await;
                                 }
                                 Err(e) => {
                                     println!("{} Failed to create session: {}", "✗".red(), e);
@@ -370,7 +370,8 @@ async fn main() -> Result<()> {
                                 }
                             } else {
                                 // Normal checkout
-                                let _ = git::graph::checkout_branch(path, &target);
+                                // Note: we need to wrap the async checkout correctly here since main is tokio::main
+                                let _ = git::graph::checkout_branch(path, &target).await;
                             }
                         }
                     }

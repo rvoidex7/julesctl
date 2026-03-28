@@ -11,6 +11,7 @@ use tokio::time::Duration;
 ///
 /// Note: Code synchronization (the actual working tree or Git commits) is STRICTLY out of scope
 /// for Ahenk. That must always remain Git-first (`git fetch`, `git pull`).
+#[allow(dead_code)]
 pub struct AhenkSyncManager {
     // Placeholder for underlying Ahenk network client configuration.
     // E.g., device_id: String, network_key: String
@@ -19,6 +20,7 @@ pub struct AhenkSyncManager {
 
 impl AhenkSyncManager {
     /// Initializes the Ahenk sync manager.
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             // By default, disabled until user sets it up via the Settings UI.
@@ -27,7 +29,8 @@ impl AhenkSyncManager {
     }
 
     /// Attempts to connect to known peer devices to push/pull global configuration state.
-    pub async fn connect_and_sync(&self, current_config: &mut Config) -> Result<()> {
+    #[allow(dead_code)]
+    pub async fn connect_and_sync(&self, _current_config: &mut Config) -> Result<()> {
         if !self.is_enabled {
             return Ok(());
         }
@@ -46,6 +49,7 @@ impl AhenkSyncManager {
 
     /// Merges remote Ahenk state intelligently with the local state.
     /// Prefers newer timestamped configurations.
+    #[allow(dead_code)]
     pub fn merge_states(&self, local: &mut Config, remote: Config) {
         // Example merge logic: If remote has different active tabs, we could ask the user
         // or just accept remote. Since this is an outline, we leave it as a stub.
@@ -81,6 +85,7 @@ impl AhenkSyncManager {
     }
 
     /// Exposes a way to trigger an instant broadcast of the local state to connected peers.
+    #[allow(dead_code)]
     pub async fn broadcast_state(&self, _local: &Config) -> Result<()> {
         if !self.is_enabled {
             return Ok(());
