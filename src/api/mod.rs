@@ -1,4 +1,5 @@
 pub mod activities;
+pub mod ahenk;
 pub mod sessions;
 
 use anyhow::{bail, Result};
