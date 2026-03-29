@@ -246,7 +246,10 @@ impl MessagingAdapter for JulesAdapter {
                                 // Since cli-chat-rs generic MessageContent doesn't natively have a "Tree" type,
                                 // we parse Plan activities and map them into beautifully formatted Markdown/ASCII text lists.
                                 let display_text = if a.plan.is_some() {
-                                    format!("📋 **Plan Generated**:\n{}", m.text.replace("- ", "  ├─ "))
+                                    format!(
+                                        "📋 **Plan Generated**:\n{}",
+                                        m.text.replace("- ", "  ├─ ")
+                                    )
                                 } else {
                                     m.text.clone()
                                 };

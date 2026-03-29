@@ -1,14 +1,16 @@
 use crate::config::Config;
 use crate::git::graph::{
-    abort_merge_or_cherry_pick, apply_cherry_pick, enable_git_rerere, fetch_origin, get_commit_diff, get_workflow_commits, revert_commit,
-    BranchType, GitActionOutcome, GitCommit,
+    abort_merge_or_cherry_pick, apply_cherry_pick, enable_git_rerere, fetch_origin,
+    get_commit_diff, get_workflow_commits, revert_commit, BranchType, GitActionOutcome, GitCommit,
 };
+use crate::git::graph::{drop_commit, squash_commits};
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use nucleo::{Config as NucleoConfig, Nucleo};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
@@ -17,11 +19,11 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Terminal,
 };
-use tui_tree_widget::{Tree, TreeItem, TreeState};
 use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tui_tree_widget::{Tree, TreeItem, TreeState};
 
 pub enum DashboardAction {
     Quit,
@@ -35,8 +37,9 @@ pub enum DashboardAction {
 enum BgTaskResult {
     CommitsFetched(Vec<GitCommit>),
     DiffFetched(String, String), // (sha, diff_text)
-    ActionCompleted(String), // e.g. Revert/Cherry-pick status log
-    ConflictDetected(String), // The raw conflict text
+    ActionCompleted(String),     // e.g. Revert/Cherry-pick status log
+    ConflictDetected(String),    // The raw conflict text
+    BranchesFetched(Vec<String>, Vec<String>, Vec<String>), // (local, ai_sessions, remote_main)
 }
 
 pub async fn run_dashboard(cfg: &Config, active_tab: usize) -> Result<DashboardAction> {
@@ -88,12 +91,14 @@ where
 
     let mut workflow_only = true;
     let mut is_branch_view = false; // Toggled with `v`
-    let mut is_loading = true;      // Tracks UI loading state
-    let mut observer_mode = false;  // Task 20: Observer Mode
+    let mut is_loading = true; // Tracks UI loading state
+    let mut observer_mode = false; // Task 20: Observer Mode
 
     // Task 11: Fuzzy Search State
     let mut search_active = false;
     let mut search_query = String::new();
+    let mut matcher =
+        Nucleo::<GitCommit>::new(NucleoConfig::DEFAULT, std::sync::Arc::new(|| {}), None, 2); // Title and SHA
 
     // Task 22: Conflict Resolution State
     let mut conflict_modal_active = false;
@@ -111,7 +116,12 @@ where
     let mut current_diff_sha = String::new();
     let mut action_log = String::from("Fetching initial commit tree...");
 
-    // Fire off the initial background load (Fetch origin + Get Commits)
+    // Task 7: Branches state
+    let mut local_branches = Vec::new();
+    let mut ai_branches = Vec::new();
+    let mut remote_branches = Vec::new();
+
+    // Fire off the initial background load (Fetch origin + Get Commits + Get Branches)
     let rp_clone = repo_path.clone();
     let tx_clone = tx.clone();
     tokio::spawn(async move {
@@ -121,6 +131,11 @@ where
         let _ = fetch_origin(&rp_clone).await;
         if let Ok(fetched) = get_workflow_commits(&rp_clone, workflow_only).await {
             let _ = tx_clone.send(BgTaskResult::CommitsFetched(fetched)).await;
+        }
+        if let Ok((local, ai, remote)) = crate::git::graph::get_all_branches(&rp_clone).await {
+            let _ = tx_clone
+                .send(BgTaskResult::BranchesFetched(local, ai, remote))
+                .await;
         }
     });
 
@@ -143,7 +158,7 @@ where
         .collect();
 
     // Cache the UI list items to avoid massive string mapping per frame.
-    let mut cached_list_items: Vec<ListItem> = Vec::new();
+    let mut cached_list_items: Vec<Line> = Vec::new();
     let mut needs_list_rebuild = true;
 
     loop {
@@ -154,9 +169,19 @@ where
             match msg {
                 BgTaskResult::CommitsFetched(new_commits) => {
                     commits = new_commits.clone();
-                    filtered_commits = new_commits;
+                    filtered_commits = new_commits.clone();
                     needs_list_rebuild = true;
                     is_loading = false;
+
+                    // Task 11 Update Nucleo matcher corpus
+                    // Wait for injector completion without blocking using try
+                    let injector = matcher.injector();
+                    for c in &new_commits {
+                        injector.push(c.clone(), |c, cols| {
+                            cols[0] = c.title.clone().into();
+                            cols[1] = c.sha.clone().into();
+                        });
+                    }
 
                     // Task 27 / Bugfix: Prevent Out-Of-Bounds panic when list shrinks
                     if !commits.is_empty() && selected_idx >= commits.len() {
@@ -194,6 +219,11 @@ where
                     conflict_modal_active = true;
                     conflict_details = details;
                 }
+                BgTaskResult::BranchesFetched(local, ai, remote) => {
+                    local_branches = local;
+                    ai_branches = ai;
+                    remote_branches = remote;
+                }
             }
         }
 
@@ -212,7 +242,9 @@ where
                 let diff_text = get_commit_diff(&rp_clone, &target_sha)
                     .await
                     .unwrap_or_else(|e| e.to_string());
-                let _ = tx_clone.send(BgTaskResult::DiffFetched(target_sha, diff_text)).await;
+                let _ = tx_clone
+                    .send(BgTaskResult::DiffFetched(target_sha, diff_text))
+                    .await;
             });
         }
 
@@ -267,23 +299,37 @@ where
 
             // Left Panel (Viewer/Navigator)
             if is_branch_view {
-                // Task 7: Branch View using tui-tree-widget
-                let tree_items = vec![
-                    TreeItem::new_leaf("main".to_string(), "🐱 origin/main"),
-                    TreeItem::new(
+                // Task 7: Branch View using dynamically parsed `gix` output
+                let mut ai_children = Vec::new();
+                for (i, ai_b) in ai_branches.iter().enumerate() {
+                    let icon = if i == ai_branches.len() - 1 { "└─" } else { "├─" };
+                    ai_children.push(TreeItem::new_leaf(ai_b.clone(), format!("  {} {}", icon, ai_b)));
+                }
+
+                let mut tree_items = Vec::new();
+
+                // Add AI Sessions node if present
+                if !ai_children.is_empty() {
+                    tree_items.push(TreeItem::new(
                         "jules".to_string(),
                         "🦑 jules/ (AI Sessions)",
-                        vec![
-                            TreeItem::new_leaf("task1".to_string(), "  ├─ task-1234 (Login Fix)"),
-                            TreeItem::new_leaf("task2".to_string(), "  └─ task-5678 (UI Update)"),
-                        ],
-                    ).unwrap(),
-                    TreeItem::new_leaf("local".to_string(), "💻 my-local-branch"),
-                ];
+                        ai_children,
+                    ).unwrap());
+                }
+
+                // Add Remote Main tracking
+                for rb in &remote_branches {
+                    tree_items.push(TreeItem::new_leaf(format!("remote_{}", rb), format!("🐱 origin/{}", rb)));
+                }
+
+                // Add Local Branches
+                for lb in &local_branches {
+                    tree_items.push(TreeItem::new_leaf(format!("local_{}", lb), format!("💻 {}", lb)));
+                }
 
                 let tree = Tree::new(&tree_items)
                     .unwrap()
-                    .block(Block::default().borders(Borders::ALL).title(" Branch View (Press 'V' to toggle) "))
+                    .block(Block::default().borders(Borders::ALL).title(" 🌲 Branch View (Press 'V' to toggle) "))
                     .highlight_style(Style::default().fg(Color::Black).bg(Color::Yellow));
 
                 f.render_stateful_widget(tree, body_chunks[0], &mut tree_state);
@@ -301,10 +347,10 @@ where
 
                             if c.sha.is_empty() {
                                 // This is just an empty graph connector line like "| |"
-                                return ListItem::new(Line::from(vec![Span::styled(
+                                return Line::from(vec![Span::styled(
                                     c.graph_prefix.clone(),
                                     Style::default().fg(Color::DarkGray),
-                                )]));
+                                )]);
                             }
 
                             let prefix = match c.branch_type {
@@ -317,7 +363,7 @@ where
                                 "{} {} [{}] {}",
                                 c.graph_prefix, prefix, c.short_sha, c.title
                             );
-                            ListItem::new(Line::from(vec![Span::styled(text, style)]))
+                            Line::from(vec![Span::styled(text, style)])
                         })
                         .collect();
                     needs_list_rebuild = false;
@@ -335,7 +381,7 @@ where
 
             let list_title = search_header.as_str();
 
-                let list = List::new(cached_list_items.clone())
+                let list = List::new(cached_list_items.iter().map(|l| ListItem::new(l.clone())).collect::<Vec<_>>())
                     .block(Block::default().borders(Borders::ALL).title(list_title));
                 f.render_stateful_widget(list, body_chunks[0], &mut list_state);
             }
@@ -486,27 +532,53 @@ where
                                 let tx_clone = tx.clone();
                                 tokio::spawn(async move {
                                     let _ = abort_merge_or_cherry_pick(&rp_clone).await;
-                                    let _ = tx_clone.send(BgTaskResult::ActionCompleted("Conflict aborted successfully.".to_string())).await;
+                                    let _ = tx_clone
+                                        .send(BgTaskResult::ActionCompleted(
+                                            "Conflict aborted successfully.".to_string(),
+                                        ))
+                                        .await;
                                 });
                             }
                             KeyCode::Char('o') | KeyCode::Char('O') => {
-                                // Task 22: Tier 1 - [O] Keep Ours (Checkout our version of files and continue)
-                                action_log = "Keeping Ours... (Stubbed IDE resolution)".to_string();
+                                // Task 22: Tier 1 - [O] Keep Ours
+                                is_loading = true;
+                                action_log = "Resolving conflict keeping OURS...".to_string();
                                 conflict_modal_active = false;
+                                let rp_clone = repo_path.clone();
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let log = crate::git::graph::resolve_conflict_ours(&rp_clone)
+                                        .await
+                                        .unwrap_or_else(|e| format!("Resolve Error: {}", e));
+                                    let _ = tx_clone.send(BgTaskResult::ActionCompleted(log)).await;
+                                });
                             }
                             KeyCode::Char('t') | KeyCode::Char('T') => {
                                 // Task 22: Tier 1 - [T] Keep Theirs
-                                action_log = "Keeping Theirs... (Stubbed IDE resolution)".to_string();
+                                is_loading = true;
+                                action_log = "Resolving conflict keeping THEIRS...".to_string();
                                 conflict_modal_active = false;
+                                let rp_clone = repo_path.clone();
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let log = crate::git::graph::resolve_conflict_theirs(&rp_clone)
+                                        .await
+                                        .unwrap_or_else(|e| format!("Resolve Error: {}", e));
+                                    let _ = tx_clone.send(BgTaskResult::ActionCompleted(log)).await;
+                                });
                             }
                             KeyCode::Char('m') | KeyCode::Char('M') => {
                                 // Task 22: Tier 1 - [M] Manual IDE Resolve
-                                action_log = "Manual IDE resolve triggered. (Dropping terminal context)".to_string();
+                                action_log =
+                                    "Manual IDE resolve triggered. (Dropping terminal context)"
+                                        .to_string();
                                 conflict_modal_active = false;
                             }
                             KeyCode::Char('i') | KeyCode::Char('I') => {
                                 // Task 24: Tier 2 Conflict Resolution Framework (AI XML Generator)
-                                action_log = "Generating structured XML Conflict Prompt for AI Session...".to_string();
+                                action_log =
+                                    "Generating structured XML Conflict Prompt for AI Session..."
+                                        .to_string();
                                 conflict_modal_active = false;
 
                                 // In a real scenario, this reads from `git diff --name-only --diff-filter=U`
@@ -539,14 +611,23 @@ where
                             }
                             KeyCode::Backspace => {
                                 search_query.pop();
-                                // Basic filtering logic (Task 11)
+                                // Task 11: Nucleo Fuzzy Matcher
                                 if search_query.is_empty() {
                                     commits = filtered_commits.clone();
                                 } else {
-                                    let lower_q = search_query.to_lowercase();
-                                    commits = filtered_commits.iter().filter(|c| {
-                                        c.title.to_lowercase().contains(&lower_q) || c.sha.starts_with(&lower_q)
-                                    }).cloned().collect();
+                                    matcher.pattern.reparse(
+                                        0,
+                                        &search_query,
+                                        nucleo::pattern::CaseMatching::Ignore,
+                                        nucleo::pattern::Normalization::Smart,
+                                        false,
+                                    );
+                                    matcher.tick(10);
+                                    let snapshot = matcher.snapshot();
+                                    commits = snapshot
+                                        .matched_items(0..snapshot.matched_item_count())
+                                        .map(|m| m.data.clone())
+                                        .collect();
                                 }
                                 // Clamping selected_idx safely
                                 if !commits.is_empty() && selected_idx >= commits.len() {
@@ -558,10 +639,20 @@ where
                             }
                             KeyCode::Char(c) => {
                                 search_query.push(c);
-                                let lower_q = search_query.to_lowercase();
-                                commits = filtered_commits.iter().filter(|c| {
-                                    c.title.to_lowercase().contains(&lower_q) || c.sha.starts_with(&lower_q)
-                                }).cloned().collect();
+                                matcher.pattern.reparse(
+                                    0,
+                                    &search_query,
+                                    nucleo::pattern::CaseMatching::Ignore,
+                                    nucleo::pattern::Normalization::Smart,
+                                    false,
+                                );
+                                matcher.tick(10);
+                                let snapshot = matcher.snapshot();
+                                commits = snapshot
+                                    .matched_items(0..snapshot.matched_item_count())
+                                    .map(|m| m.data.clone())
+                                    .collect();
+
                                 // Clamping selected_idx safely
                                 if !commits.is_empty() && selected_idx >= commits.len() {
                                     selected_idx = commits.len().saturating_sub(1);
@@ -574,58 +665,62 @@ where
                         }
                     } else {
                         match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(DashboardAction::Quit),
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        while selected_idx > 0 {
-                            selected_idx -= 1;
-                            if !commits[selected_idx].sha.is_empty() {
-                                break;
-                            } // Skip empty graph lines
-                        }
-                    }
-                    KeyCode::Char('g') => {
-                        selected_idx = 0;
-                    }
-                    KeyCode::Char('G') => {
-                        if !commits.is_empty() {
-                            selected_idx = commits.len() - 1;
-                        }
-                    }
-                    KeyCode::PageUp | KeyCode::Char('K') => {
-                        diff_scroll_offset = diff_scroll_offset.saturating_sub(10);
-                    }
-                    KeyCode::PageDown | KeyCode::Char('J') => {
-                        diff_scroll_offset = diff_scroll_offset.saturating_add(10);
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        while !commits.is_empty() && selected_idx + 1 < commits.len() {
-                            selected_idx += 1;
-                            if !commits[selected_idx].sha.is_empty() {
-                                break;
-                            } // Skip empty graph lines
-                        }
-                    }
-                    KeyCode::Char('/') => {
-                        search_active = true;
-                        search_query.clear();
-                        action_log = "Search Mode: Type to filter commits. Press Esc/Enter to exit.".to_string();
-                    }
-                    KeyCode::Char('y') => {
-                        // Task 12 Clipboard copying
-                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                            let _ = clipboard.set_text(current_diff_sha.clone());
-                            action_log = "Commit SHA copied to clipboard!".to_string();
-                        }
-                    }
-                    KeyCode::Char('b') | KeyCode::Char('B') => {
-                        // Task 20: Observer Mode toggle
-                        observer_mode = !observer_mode;
-                        if observer_mode {
-                            action_log = "Observer Mode ENABLED. Modifications locked.".to_string();
-                        } else {
-                            action_log = "Observer Mode DISABLED. Modifications unlocked.".to_string();
-                        }
-                    }
+                            KeyCode::Char('q') | KeyCode::Esc => return Ok(DashboardAction::Quit),
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                while selected_idx > 0 {
+                                    selected_idx -= 1;
+                                    if !commits[selected_idx].sha.is_empty() {
+                                        break;
+                                    } // Skip empty graph lines
+                                }
+                            }
+                            KeyCode::Char('g') => {
+                                selected_idx = 0;
+                            }
+                            KeyCode::Char('G') => {
+                                if !commits.is_empty() {
+                                    selected_idx = commits.len() - 1;
+                                }
+                            }
+                            KeyCode::PageUp | KeyCode::Char('K') => {
+                                diff_scroll_offset = diff_scroll_offset.saturating_sub(10);
+                            }
+                            KeyCode::PageDown | KeyCode::Char('J') => {
+                                diff_scroll_offset = diff_scroll_offset.saturating_add(10);
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                while !commits.is_empty() && selected_idx + 1 < commits.len() {
+                                    selected_idx += 1;
+                                    if !commits[selected_idx].sha.is_empty() {
+                                        break;
+                                    } // Skip empty graph lines
+                                }
+                            }
+                            KeyCode::Char('/') => {
+                                search_active = true;
+                                search_query.clear();
+                                action_log =
+                                    "Search Mode: Type to filter commits. Press Esc/Enter to exit."
+                                        .to_string();
+                            }
+                            KeyCode::Char('y') => {
+                                // Task 12 Clipboard copying
+                                if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                                    let _ = clipboard.set_text(current_diff_sha.clone());
+                                    action_log = "Commit SHA copied to clipboard!".to_string();
+                                }
+                            }
+                            KeyCode::Char('b') | KeyCode::Char('B') => {
+                                // Task 20: Observer Mode toggle
+                                observer_mode = !observer_mode;
+                                if observer_mode {
+                                    action_log =
+                                        "Observer Mode ENABLED. Modifications locked.".to_string();
+                                } else {
+                                    action_log = "Observer Mode DISABLED. Modifications unlocked."
+                                        .to_string();
+                                }
+                            }
                             KeyCode::Char(',') | KeyCode::Char('<') => {
                                 // Task 26: Settings Overlay toggle
                                 settings_modal_active = !settings_modal_active;
@@ -635,160 +730,247 @@ where
                                     action_log = "Settings UI closed.".to_string();
                                 }
                             }
-                    KeyCode::Char('e') | KeyCode::Char('E') => {
-                        // Task 21: External $EDITOR Fallback
-                        if observer_mode {
-                            action_log = "Cannot edit in Observer Mode.".to_string();
-                        } else {
-                            action_log = "Launching External Editor (Fallback)...".to_string();
-                            // Implementation note: would drop terminal context and exec $EDITOR
-                        }
-                    }
-                    KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Enter => {
-                        if !commits.is_empty() {
-                            if let BranchType::JulesSession(ref id) =
-                                commits[selected_idx].branch_type
-                            {
-                                return Ok(DashboardAction::OpenChat(
-                                    id.clone(),
-                                    commits[selected_idx].title.clone(),
-                                ));
-                            } else {
-                                action_log = "Can only open Chat on a Jules Session commit (🦑)."
-                                    .to_string();
+                            KeyCode::Char('e') | KeyCode::Char('E') => {
+                                // Task 21: External $EDITOR Fallback
+                                if observer_mode {
+                                    action_log = "Cannot edit in Observer Mode.".to_string();
+                                } else {
+                                    action_log =
+                                        "Launching External Editor (Fallback)...".to_string();
+                                    // Implementation note: would drop terminal context and exec $EDITOR
+                                }
                             }
-                        }
-                    }
-                    KeyCode::Char('a') | KeyCode::Char('A') => {
-                        if observer_mode {
-                            action_log = "Action blocked by Observer Mode.".to_string();
-                        } else if !commits.is_empty() {
-                            is_loading = true;
-                            action_log = "Applying commit...".to_string();
-                            let rp_clone = repo_path.clone();
-                            let target_sha = commits[selected_idx].sha.clone();
-                            let tx_clone = tx.clone();
-                            tokio::spawn(async move {
-                                match apply_cherry_pick(&rp_clone, &target_sha).await {
-                                    Ok(GitActionOutcome::Success(log)) => {
-                                        let _ = tx_clone.send(BgTaskResult::ActionCompleted(log)).await;
-                                    }
-                                    Ok(GitActionOutcome::Conflict(details)) => {
-                                        let _ = tx_clone.send(BgTaskResult::ConflictDetected(details)).await;
-                                    }
-                                    Err(e) => {
-                                        let _ = tx_clone.send(BgTaskResult::ActionCompleted(format!("Error: {}", e))).await;
+                            KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Enter => {
+                                if !commits.is_empty() {
+                                    if let BranchType::JulesSession(ref id) =
+                                        commits[selected_idx].branch_type
+                                    {
+                                        return Ok(DashboardAction::OpenChat(
+                                            id.clone(),
+                                            commits[selected_idx].title.clone(),
+                                        ));
+                                    } else {
+                                        action_log =
+                                            "Can only open Chat on a Jules Session commit (🦑)."
+                                                .to_string();
                                     }
                                 }
-                            });
-                        }
-                    }
-                    KeyCode::Char('r') | KeyCode::Char('R') => {
-                        if observer_mode {
-                            action_log = "Action blocked by Observer Mode.".to_string();
-                        } else if !commits.is_empty() {
-                            is_loading = true;
-                            action_log = "Reverting commit...".to_string();
-                            let rp_clone = repo_path.clone();
-                            let target_sha = commits[selected_idx].sha.clone();
-                            let tx_clone = tx.clone();
-                            tokio::spawn(async move {
-                                match revert_commit(&rp_clone, &target_sha).await {
-                                    Ok(GitActionOutcome::Success(log)) => {
-                                        let _ = tx_clone.send(BgTaskResult::ActionCompleted(log)).await;
+                            }
+                            KeyCode::Char('a') | KeyCode::Char('A') => {
+                                if observer_mode {
+                                    action_log = "Action blocked by Observer Mode.".to_string();
+                                } else if !commits.is_empty() {
+                                    is_loading = true;
+                                    action_log = "Applying commit...".to_string();
+                                    let rp_clone = repo_path.clone();
+                                    let target_sha = commits[selected_idx].sha.clone();
+                                    let tx_clone = tx.clone();
+                                    tokio::spawn(async move {
+                                        match apply_cherry_pick(&rp_clone, &target_sha).await {
+                                            Ok(GitActionOutcome::Success(log)) => {
+                                                let _ = tx_clone
+                                                    .send(BgTaskResult::ActionCompleted(log))
+                                                    .await;
+                                            }
+                                            Ok(GitActionOutcome::Conflict(details)) => {
+                                                let _ = tx_clone
+                                                    .send(BgTaskResult::ConflictDetected(details))
+                                                    .await;
+                                            }
+                                            Err(e) => {
+                                                let _ = tx_clone
+                                                    .send(BgTaskResult::ActionCompleted(format!(
+                                                        "Error: {}",
+                                                        e
+                                                    )))
+                                                    .await;
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                            KeyCode::Char('r') | KeyCode::Char('R') => {
+                                if observer_mode {
+                                    action_log = "Action blocked by Observer Mode.".to_string();
+                                } else if !commits.is_empty() {
+                                    is_loading = true;
+                                    action_log = "Reverting commit...".to_string();
+                                    let rp_clone = repo_path.clone();
+                                    let target_sha = commits[selected_idx].sha.clone();
+                                    let tx_clone = tx.clone();
+                                    tokio::spawn(async move {
+                                        match revert_commit(&rp_clone, &target_sha).await {
+                                            Ok(GitActionOutcome::Success(log)) => {
+                                                let _ = tx_clone
+                                                    .send(BgTaskResult::ActionCompleted(log))
+                                                    .await;
+                                            }
+                                            Ok(GitActionOutcome::Conflict(details)) => {
+                                                let _ = tx_clone
+                                                    .send(BgTaskResult::ConflictDetected(details))
+                                                    .await;
+                                            }
+                                            Err(e) => {
+                                                let _ = tx_clone
+                                                    .send(BgTaskResult::ActionCompleted(format!(
+                                                        "Error: {}",
+                                                        e
+                                                    )))
+                                                    .await;
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                            KeyCode::Char('f') | KeyCode::Char('F') => {
+                                workflow_only = !workflow_only;
+                                is_loading = true;
+                                action_log = "Filtering graph...".to_string();
+                                let rp_clone = repo_path.clone();
+                                let w_only = workflow_only;
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    if let Ok(fetched) =
+                                        get_workflow_commits(&rp_clone, w_only).await
+                                    {
+                                        let _ = tx_clone
+                                            .send(BgTaskResult::CommitsFetched(fetched))
+                                            .await;
                                     }
-                                    Ok(GitActionOutcome::Conflict(details)) => {
-                                        let _ = tx_clone.send(BgTaskResult::ConflictDetected(details)).await;
-                                    }
-                                    Err(e) => {
-                                        let _ = tx_clone.send(BgTaskResult::ActionCompleted(format!("Error: {}", e))).await;
+                                });
+                                selected_idx = 0;
+                                current_diff_sha = String::new(); // Force refresh diff on load
+                            }
+                            KeyCode::Char('s') => {
+                                // Task 18: Squash
+                                if observer_mode {
+                                    action_log = "Action blocked by Observer Mode.".to_string();
+                                } else if !commits.is_empty() {
+                                    is_loading = true;
+                                    action_log = "Squashing commit...".to_string();
+                                    let rp_clone = repo_path.clone();
+                                    let target_sha = commits[selected_idx].sha.clone();
+                                    let tx_clone = tx.clone();
+                                    tokio::spawn(async move {
+                                        let log = squash_commits(&rp_clone, &target_sha)
+                                            .await
+                                            .unwrap_or_else(|e| format!("Error: {}", e));
+                                        let _ =
+                                            tx_clone.send(BgTaskResult::ActionCompleted(log)).await;
+                                    });
+                                }
+                            }
+                            KeyCode::Char('d') => {
+                                // Task 18: Drop
+                                if observer_mode {
+                                    action_log = "Action blocked by Observer Mode.".to_string();
+                                } else if !commits.is_empty() {
+                                    is_loading = true;
+                                    action_log = "Dropping commit...".to_string();
+                                    let rp_clone = repo_path.clone();
+                                    let target_sha = commits[selected_idx].sha.clone();
+                                    let tx_clone = tx.clone();
+                                    tokio::spawn(async move {
+                                        match drop_commit(&rp_clone, &target_sha).await {
+                                            Ok(GitActionOutcome::Success(log)) => {
+                                                let _ = tx_clone
+                                                    .send(BgTaskResult::ActionCompleted(log))
+                                                    .await;
+                                            }
+                                            Ok(GitActionOutcome::Conflict(details)) => {
+                                                let _ = tx_clone
+                                                    .send(BgTaskResult::ConflictDetected(details))
+                                                    .await;
+                                            }
+                                            Err(e) => {
+                                                let _ = tx_clone
+                                                    .send(BgTaskResult::ActionCompleted(format!(
+                                                        "Error: {}",
+                                                        e
+                                                    )))
+                                                    .await;
+                                            }
+                                        }
+                                    });
+                                }
+                            }
+                            KeyCode::Char('p') | KeyCode::Char('P') => {
+                                // Task 19: Dual-Patching functionality (Raw API Artifacts)
+                                if observer_mode {
+                                    action_log = "Action blocked by Observer Mode.".to_string();
+                                } else if !commits.is_empty() {
+                                    if let BranchType::JulesSession(ref _id) =
+                                        commits[selected_idx].branch_type
+                                    {
+                                        action_log =
+                                            "Fetching raw patch artifact from API endpoint..."
+                                                .to_string();
+                                    } else {
+                                        action_log = "Can only fetch raw API artifacts for Jules Sessions (🦑).".to_string();
                                     }
                                 }
-                            });
-                        }
-                    }
-                    KeyCode::Char('f') | KeyCode::Char('F') => {
-                        workflow_only = !workflow_only;
-                        is_loading = true;
-                        action_log = "Filtering graph...".to_string();
-                        let rp_clone = repo_path.clone();
-                        let w_only = workflow_only;
-                        let tx_clone = tx.clone();
-                        tokio::spawn(async move {
-                            if let Ok(fetched) = get_workflow_commits(&rp_clone, w_only).await {
-                                let _ = tx_clone.send(BgTaskResult::CommitsFetched(fetched)).await;
                             }
-                        });
-                        selected_idx = 0;
-                        current_diff_sha = String::new(); // Force refresh diff on load
-                    }
-                    KeyCode::Char('s') | KeyCode::Char('d') => {
-                        // Task 18: Keyboard-Driven Visual Patch Stack (Squash/Drop)
-                        if observer_mode {
-                            action_log = "Action blocked by Observer Mode.".to_string();
-                        } else if !commits.is_empty() {
-                            action_log = "Interactive Rebase (Squash/Drop) triggered via terminal IDE...".to_string();
-                            // In a full implementation, this drops TUI context and launches `git rebase -i`
-                            // mapping 's' to squash and 'd' to drop for the selected commit range.
-                        }
-                    }
-                    KeyCode::Char('p') | KeyCode::Char('P') => {
-                        // Task 19: Dual-Patching functionality (Raw API Artifacts)
-                        if observer_mode {
-                            action_log = "Action blocked by Observer Mode.".to_string();
-                        } else if !commits.is_empty() {
-                            if let BranchType::JulesSession(ref _id) = commits[selected_idx].branch_type {
-                                action_log = "Fetching raw patch artifact from API endpoint...".to_string();
-                            } else {
-                                action_log = "Can only fetch raw API artifacts for Jules Sessions (🦑).".to_string();
+                            KeyCode::Char('v') | KeyCode::Char('V') => {
+                                is_branch_view = !is_branch_view;
                             }
+                            KeyCode::Char('n') | KeyCode::Char('N') => {
+                                return Ok(DashboardAction::CreateNewSession);
+                            }
+                            KeyCode::Char('o') | KeyCode::Char('O') => {
+                                if !commits.is_empty() {
+                                    return Ok(DashboardAction::CheckoutBranch(
+                                        commits[selected_idx].sha.clone(),
+                                    ));
+                                }
+                            }
+                            KeyCode::Char('w') | KeyCode::Char('W') => {
+                                // Task 25: Isolated parallel testing support via `git worktree`
+                                if observer_mode {
+                                    action_log = "Action blocked by Observer Mode.".to_string();
+                                } else if !commits.is_empty() {
+                                    is_loading = true;
+                                    action_log = "Checking out Worktree...".to_string();
+                                    let rp_clone = repo_path.clone();
+                                    let target_sha = commits[selected_idx].sha.clone();
+                                    let tx_clone = tx.clone();
+                                    tokio::spawn(async move {
+                                        let log = crate::git::graph::checkout_worktree(
+                                            &rp_clone,
+                                            &target_sha,
+                                        )
+                                        .await
+                                        .unwrap_or_else(|e| format!("Error: {}", e));
+                                        let _ =
+                                            tx_clone.send(BgTaskResult::ActionCompleted(log)).await;
+                                    });
+                                }
+                            }
+                            KeyCode::Tab => {
+                                let mut next = active_tab + 1;
+                                if next >= cfg.repos.len() {
+                                    next = 0;
+                                }
+                                return Ok(DashboardAction::SwitchTab(next));
+                            }
+                            KeyCode::BackTab => {
+                                let mut prev = active_tab;
+                                if prev == 0 {
+                                    prev = cfg.repos.len().saturating_sub(1);
+                                } else {
+                                    prev -= 1;
+                                }
+                                return Ok(DashboardAction::SwitchTab(prev));
+                            }
+                            KeyCode::Char(c) if c.is_ascii_digit() => {
+                                let digit = c.to_digit(10).unwrap() as usize;
+                                if digit > 0 && digit <= cfg.repos.len() {
+                                    return Ok(DashboardAction::SwitchTab(digit - 1));
+                                }
+                            }
+                            _ => {}
                         }
-                    }
-                    KeyCode::Char('v') | KeyCode::Char('V') => {
-                        is_branch_view = !is_branch_view;
-                    }
-                    KeyCode::Char('n') | KeyCode::Char('N') => {
-                        return Ok(DashboardAction::CreateNewSession);
-                    }
-                    KeyCode::Char('o') | KeyCode::Char('O') => {
-                        if !commits.is_empty() {
-                            return Ok(DashboardAction::CheckoutBranch(
-                                commits[selected_idx].sha.clone(),
-                            ));
-                        }
-                    }
-                    KeyCode::Char('w') | KeyCode::Char('W') => {
-                        // Task 25: Isolated parallel testing support via `git worktree`
-                        if !commits.is_empty() {
-                            action_log = "Git Worktree integration triggered. Preparing isolated checkout...".to_string();
-                        }
-                    }
-                    KeyCode::Tab => {
-                        let mut next = active_tab + 1;
-                        if next >= cfg.repos.len() {
-                            next = 0;
-                        }
-                        return Ok(DashboardAction::SwitchTab(next));
-                    }
-                    KeyCode::BackTab => {
-                        let mut prev = active_tab;
-                        if prev == 0 {
-                            prev = cfg.repos.len().saturating_sub(1);
-                        } else {
-                            prev -= 1;
-                        }
-                        return Ok(DashboardAction::SwitchTab(prev));
-                    }
-                    KeyCode::Char(c) if c.is_ascii_digit() => {
-                        let digit = c.to_digit(10).unwrap() as usize;
-                        if digit > 0 && digit <= cfg.repos.len() {
-                            return Ok(DashboardAction::SwitchTab(digit - 1));
-                        }
-                    }
-                    _ => {}
+                    } // End of !search_active branch
                 }
-                } // End of !search_active branch
-                },
                 Event::Mouse(mouse_event) => {
                     if mouse_event.kind == MouseEventKind::Down(crossterm::event::MouseButton::Left)
                     {
@@ -815,13 +997,22 @@ where
                                     tokio::spawn(async move {
                                         match apply_cherry_pick(&rp_clone, &target_sha).await {
                                             Ok(GitActionOutcome::Success(log)) => {
-                                                let _ = tx_clone.send(BgTaskResult::ActionCompleted(log)).await;
+                                                let _ = tx_clone
+                                                    .send(BgTaskResult::ActionCompleted(log))
+                                                    .await;
                                             }
                                             Ok(GitActionOutcome::Conflict(details)) => {
-                                                let _ = tx_clone.send(BgTaskResult::ConflictDetected(details)).await;
+                                                let _ = tx_clone
+                                                    .send(BgTaskResult::ConflictDetected(details))
+                                                    .await;
                                             }
                                             Err(e) => {
-                                                let _ = tx_clone.send(BgTaskResult::ActionCompleted(format!("Error: {}", e))).await;
+                                                let _ = tx_clone
+                                                    .send(BgTaskResult::ActionCompleted(format!(
+                                                        "Error: {}",
+                                                        e
+                                                    )))
+                                                    .await;
                                             }
                                         }
                                     });
@@ -839,13 +1030,22 @@ where
                                     tokio::spawn(async move {
                                         match revert_commit(&rp_clone, &target_sha).await {
                                             Ok(GitActionOutcome::Success(log)) => {
-                                                let _ = tx_clone.send(BgTaskResult::ActionCompleted(log)).await;
+                                                let _ = tx_clone
+                                                    .send(BgTaskResult::ActionCompleted(log))
+                                                    .await;
                                             }
                                             Ok(GitActionOutcome::Conflict(details)) => {
-                                                let _ = tx_clone.send(BgTaskResult::ConflictDetected(details)).await;
+                                                let _ = tx_clone
+                                                    .send(BgTaskResult::ConflictDetected(details))
+                                                    .await;
                                             }
                                             Err(e) => {
-                                                let _ = tx_clone.send(BgTaskResult::ActionCompleted(format!("Error: {}", e))).await;
+                                                let _ = tx_clone
+                                                    .send(BgTaskResult::ActionCompleted(format!(
+                                                        "Error: {}",
+                                                        e
+                                                    )))
+                                                    .await;
                                             }
                                         }
                                     });

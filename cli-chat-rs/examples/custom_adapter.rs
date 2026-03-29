@@ -11,6 +11,12 @@ pub struct CustomAdapter {
     status: ConnectionStatus,
 }
 
+impl Default for CustomAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CustomAdapter {
     pub fn new() -> Self {
         Self {
