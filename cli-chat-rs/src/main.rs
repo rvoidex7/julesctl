@@ -243,11 +243,10 @@ async fn run_ui(
                 let is_mobile = size.width < MOBILE_THRESHOLD;
 
                 // Handle ESC for mobile back navigation
-                if is_mobile && key.code == KeyCode::Esc {
-                    if active_screen == ActiveScreen::ChatView {
-                        active_screen = ActiveScreen::ChatList;
-                        continue;
-                    }
+                if is_mobile && key.code == KeyCode::Esc && active_screen == ActiveScreen::ChatView
+                {
+                    active_screen = ActiveScreen::ChatList;
+                    continue;
                 }
 
                 match action {

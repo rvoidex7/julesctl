@@ -1,6 +1,5 @@
-use crate::config::{Config, JulesSession, RepoConfig};
+use crate::config::Config;
 use anyhow::Result;
-use std::path::PathBuf;
 use tokio::time::Duration;
 
 /// Ahenk Sync Manager for Peer-to-Peer (P2P) cross-device state synchronization.
@@ -61,11 +60,7 @@ impl AhenkSyncManager {
 
         // Example: Sync hierarchical sessions
         for remote_repo in remote.repos {
-            if let Some(local_repo) = local
-                .repos
-                .iter_mut()
-                .find(|r| r.path == remote_repo.path)
-            {
+            if let Some(local_repo) = local.repos.iter_mut().find(|r| r.path == remote_repo.path) {
                 // Simple append strategy for new sessions unseen locally.
                 for remote_session in remote_repo.sessions {
                     if !local_repo

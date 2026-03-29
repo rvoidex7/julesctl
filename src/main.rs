@@ -306,7 +306,8 @@ async fn main() -> Result<()> {
                                         "✓".green(),
                                         session.id()
                                     );
-                                    let _ = git::graph::fetch_origin(std::path::Path::new(&r.path)).await;
+                                    let _ = git::graph::fetch_origin(std::path::Path::new(&r.path))
+                                        .await;
                                 }
                                 Err(e) => {
                                     println!("{} Failed to create session: {}", "✗".red(), e);
