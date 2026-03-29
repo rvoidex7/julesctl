@@ -89,72 +89,63 @@ pub async fn get_workflow_commits(repo_path: &Path, workflow_only: bool) -> Resu
 
         // Because we use --graph, the line starts with ascii art, then our %H etc...
         // So we need to split at the first 40 character SHA (which will be preceded by ascii graph).
-        // To make it easy, we split by the first \x00. The graph + SHA will be in the first part.
-        let parts: Vec<&str> = line.split('\x00').collect();
-        if parts.len() < 4 {
-            // It might just be a graph connecting line with no commit data (e.g., "| |")
+        // Optimization: Use iterators directly to avoid allocating a large Vec of Strings per line.
+        let mut parts = line.split('\x00');
+
+        let graph_and_sha = match parts.next() {
+            Some(s) => s,
+            None => continue,
+        };
+
+        let short_sha = parts.next().unwrap_or_default();
+        let title = parts.next().unwrap_or_default();
+        let refs_str = parts.next().unwrap_or_default();
+
+        // If we didn't extract the basic fields, it's just an ASCII branch connecting line
+        if short_sha.is_empty() && title.is_empty() {
             commits.push(GitCommit {
                 sha: String::new(),
                 short_sha: String::new(),
                 title: String::new(),
                 branch_type: BranchType::Local,
-                graph_prefix: line.to_string(), // Just keep the art
+                graph_prefix: line.to_string(), // Keep the art
             });
             continue;
         }
 
-        // Part 0 contains: "GRAPH_ART SHA"
-        // Let's separate the graph from the SHA
-        let graph_and_sha = parts[0];
-        // Git SHA is 40 chars. Let's find where it starts.
-        let mut graph_prefix = String::new();
-        let sha;
-
-        if graph_and_sha.len() >= 40 {
+        // Separate the graph from the 40 character SHA natively
+        let (graph_prefix, sha) = if graph_and_sha.len() >= 40 {
             let split_idx = graph_and_sha.len() - 40;
-            graph_prefix = graph_and_sha[..split_idx].to_string();
-            sha = graph_and_sha[split_idx..].to_string();
+            (&graph_and_sha[..split_idx], &graph_and_sha[split_idx..])
         } else {
-            sha = graph_and_sha.to_string();
-        }
+            ("", graph_and_sha)
+        };
 
-        let short_sha = parts[1].to_string();
-        let title = parts[2].to_string();
-
-        // Parse refs to determine branch type (e.g., "HEAD -> main, origin/main", "origin/jules/task-1234")
-        let refs_str = parts[3];
-        let refs: Vec<String> = refs_str
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-
+        // Parse refs to determine branch type efficiently (e.g., "HEAD -> main, origin/main")
         let mut branch_type = BranchType::Local;
 
-        for r in &refs {
-            if r.contains("origin/jules/task-") || r.contains("jules/task-") {
-                // Extract session ID
-                let parts: Vec<&str> = r.split("task-").collect();
-                if parts.len() > 1 {
-                    let id = parts[1]
-                        .split(&[' ', ','][..])
-                        .next()
-                        .unwrap_or("")
-                        .to_string();
-                    branch_type = BranchType::JulesSession(id);
-                    break; // Jules branch takes precedence for UI emoji
+        if !refs_str.is_empty() {
+            for r in refs_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                if r.contains("origin/jules/task-") || r.contains("jules/task-") {
+                    let mut session_parts = r.split("task-");
+                    let _ = session_parts.next(); // Skip prefix
+                    if let Some(id_part) = session_parts.next() {
+                        let id = id_part.split(&[' ', ','][..]).next().unwrap_or("").to_string();
+                        branch_type = BranchType::JulesSession(id);
+                        break; // Jules branch takes visual precedence
+                    }
+                } else if r.contains("origin/") {
+                    branch_type = BranchType::RemoteMain;
                 }
-            } else if r.contains("origin/") {
-                branch_type = BranchType::RemoteMain;
             }
         }
 
         commits.push(GitCommit {
-            sha,
-            short_sha,
-            title,
+            sha: sha.to_string(),
+            short_sha: short_sha.to_string(),
+            title: title.to_string(),
             branch_type,
-            graph_prefix,
+            graph_prefix: graph_prefix.to_string(),
         });
     }
 
@@ -188,7 +179,12 @@ pub fn generate_memory_diff(original: &str, modified: &str) -> String {
     x
 }
 
-pub async fn apply_cherry_pick(repo_path: &Path, sha: &str) -> Result<String> {
+pub enum GitActionOutcome {
+    Success(String),
+    Conflict(String), // Returns the standard error string (conflict details) without aborting
+}
+
+pub async fn apply_cherry_pick(repo_path: &Path, sha: &str) -> Result<GitActionOutcome> {
     let output = Command::new("git")
         .current_dir(repo_path)
         .args(["cherry-pick", sha])
@@ -196,21 +192,15 @@ pub async fn apply_cherry_pick(repo_path: &Path, sha: &str) -> Result<String> {
         .await?;
 
     if output.status.success() {
-        Ok(format!("Successfully applied commit {}", sha))
+        Ok(GitActionOutcome::Success(format!("Successfully applied commit {}", sha)))
     } else {
-        // Abort failed cherry-pick
-        let _ = Command::new("git")
-            .current_dir(repo_path)
-            .args(["cherry-pick", "--abort"])
-            .output()
-            .await;
-
-        let err = String::from_utf8_lossy(&output.stderr);
-        Err(anyhow::anyhow!("Conflict applying {}:\n{}", sha, err))
+        // We no longer blindly abort. We enter conflict resolution state (Task 22).
+        let err = String::from_utf8_lossy(&output.stdout); // Git often puts conflict data in stdout
+        Ok(GitActionOutcome::Conflict(format!("Conflict applying {}:\n{}", sha, err)))
     }
 }
 
-pub async fn revert_commit(repo_path: &Path, sha: &str) -> Result<String> {
+pub async fn revert_commit(repo_path: &Path, sha: &str) -> Result<GitActionOutcome> {
     let output = Command::new("git")
         .current_dir(repo_path)
         .args(["revert", "--no-edit", sha])
@@ -218,17 +208,42 @@ pub async fn revert_commit(repo_path: &Path, sha: &str) -> Result<String> {
         .await?;
 
     if output.status.success() {
-        Ok(format!("Successfully reverted commit {}", sha))
+        Ok(GitActionOutcome::Success(format!("Successfully reverted commit {}", sha)))
     } else {
-        let _ = Command::new("git")
-            .current_dir(repo_path)
-            .args(["revert", "--abort"])
-            .output()
-            .await;
-
-        let err = String::from_utf8_lossy(&output.stderr);
-        Err(anyhow::anyhow!("Failed to revert {}:\n{}", sha, err))
+        let err = String::from_utf8_lossy(&output.stdout);
+        Ok(GitActionOutcome::Conflict(format!("Failed to revert {}:\n{}", sha, err)))
     }
+}
+
+pub async fn abort_merge_or_cherry_pick(repo_path: &Path) -> Result<()> {
+    // Determine if we are in a cherry-pick or revert or merge, and abort safely.
+    // Easiest blunt force method: try both.
+    let _ = Command::new("git").current_dir(repo_path).args(["cherry-pick", "--abort"]).output().await;
+    let _ = Command::new("git").current_dir(repo_path).args(["revert", "--abort"]).output().await;
+    let _ = Command::new("git").current_dir(repo_path).args(["merge", "--abort"]).output().await;
+    Ok(())
+}
+
+/// Enables Git `rerere` (Reuse Recorded Resolution) cache for Tier 3 conflict resolutions.
+pub async fn enable_git_rerere(repo_path: &Path) -> Result<()> {
+    Command::new("git")
+        .current_dir(repo_path)
+        .args(["config", "rerere.enabled", "true"])
+        .output()
+        .await?;
+    Ok(())
+}
+
+/// Magic Wand Placeholder: Leverages `diffy` in the background for non-overlapping chunk
+/// merges that Git's default text merge fails on. Called before returning `GitActionOutcome::Conflict`.
+#[allow(dead_code)]
+pub async fn auto_merge_non_conflicting_chunks(_repo_path: &Path) -> Result<bool> {
+    // TODO: Task 23 Magic Wand integration.
+    // 1. Parse conflict markers (<<<<<<< HEAD)
+    // 2. Identify disjoint hunks
+    // 3. Diffy merge patch safely
+    // 4. Return true if safely magically resolved
+    Ok(false)
 }
 
 pub async fn checkout_branch(repo_path: &Path, branch_name_or_sha: &str) -> Result<String> {
