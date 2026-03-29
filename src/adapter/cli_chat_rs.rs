@@ -107,11 +107,18 @@ impl MessagingAdapter for JulesAdapter {
             .filter_map(|a| {
                 a.message.as_ref().map(|m| {
                     let is_me = m.author.to_uppercase() == "USER";
+
+                    let display_text = if a.plan.is_some() {
+                        format!("📋 **Plan Generated**:\n{}", m.text.replace("- ", "  ├─ "))
+                    } else {
+                        m.text.clone()
+                    };
+
                     Message {
                         id: a.name.clone(),
                         chat_id: chat_id.clone(),
                         sender_id: m.author.clone(),
-                        content: MessageContent::Text(m.text.clone()),
+                        content: MessageContent::Text(display_text),
                         timestamp: DateTime::parse_from_rfc3339(&a.create_time)
                             .map(|d| d.with_timezone(&Utc))
                             .unwrap_or_else(|_| Utc::now()),
@@ -234,11 +241,21 @@ impl MessagingAdapter for JulesAdapter {
 
                             if let Some(m) = a.message.as_ref() {
                                 let is_me = m.author.to_uppercase() == "USER";
+
+                                // Task 14: Implement tree/list rendering for Jules "Plan/Todo list"
+                                // Since cli-chat-rs generic MessageContent doesn't natively have a "Tree" type,
+                                // we parse Plan activities and map them into beautifully formatted Markdown/ASCII text lists.
+                                let display_text = if a.plan.is_some() {
+                                    format!("📋 **Plan Generated**:\n{}", m.text.replace("- ", "  ├─ "))
+                                } else {
+                                    m.text.clone()
+                                };
+
                                 let msg = Message {
                                     id: a.name.clone(),
                                     chat_id: session_id.clone(),
                                     sender_id: m.author.clone(),
-                                    content: MessageContent::Text(m.text.clone()),
+                                    content: MessageContent::Text(display_text),
                                     timestamp: DateTime::parse_from_rfc3339(&a.create_time)
                                         .map(|d| d.with_timezone(&Utc))
                                         .unwrap_or_else(|_| Utc::now()),
