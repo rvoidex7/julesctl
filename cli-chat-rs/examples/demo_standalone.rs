@@ -68,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let chats = app.adapter().get_chats().await.unwrap_or_default();
 
         terminal.draw(|f| {
-            let size = f.size();
+            let size = f.area();
             let is_mobile = size.width < MOBILE_THRESHOLD;
 
             let chunks = Layout::default()
@@ -213,11 +213,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let is_mobile = size.width < MOBILE_THRESHOLD;
 
                 // Handle ESC for mobile back navigation
-                if is_mobile && key.code == KeyCode::Esc {
-                    if active_screen == ActiveScreen::ChatView {
-                        active_screen = ActiveScreen::ChatList;
-                        continue;
-                    }
+                if is_mobile && key.code == KeyCode::Esc && active_screen == ActiveScreen::ChatView
+                {
+                    active_screen = ActiveScreen::ChatList;
+                    continue;
                 }
 
                 match action {
