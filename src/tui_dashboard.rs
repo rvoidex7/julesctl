@@ -40,6 +40,7 @@ enum BgTaskResult {
     ActionCompleted(String),     // e.g. Revert/Cherry-pick status log
     ConflictDetected(String),    // The raw conflict text
     BranchesFetched(Vec<String>, Vec<String>, Vec<String>), // (local, ai_sessions, remote_main)
+    TriggerLocalCliSession,      // Signals the main loop to drop out of ratatui and spawn the CLI
 }
 
 pub async fn run_dashboard(cfg: &Config, active_tab: usize) -> Result<DashboardAction> {
@@ -71,7 +72,7 @@ pub async fn run_dashboard(cfg: &Config, active_tab: usize) -> Result<DashboardA
 ///
 /// Keyboard polling (`crossterm::event::poll`) happens instantly, while heavy lifting
 /// triggers a `tokio::spawn` background job that communicates back to this loop via `rx.try_recv()`.
-async fn dashboard_loop<B: ratatui::backend::Backend>(
+async fn dashboard_loop<B: ratatui::backend::Backend + std::io::Write>(
     terminal: &mut Terminal<B>,
     cfg: &Config,
     active_tab: usize,
@@ -223,6 +224,89 @@ where
                     local_branches = local;
                     ai_branches = ai;
                     remote_branches = remote;
+                }
+                BgTaskResult::TriggerLocalCliSession => {
+                    // Task 27 & 28: Drop out of Alternate Screen, spawn interactive CLI in worktree
+                    disable_raw_mode().unwrap();
+                    execute!(
+                        terminal.backend_mut(),
+                        LeaveAlternateScreen,
+                        DisableMouseCapture
+                    ).unwrap();
+                    terminal.show_cursor().unwrap();
+
+                    println!("\n🚀 Spawning Universal AI Git Orchestrator...");
+                    let task_id = format!("task-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
+                    println!("Creating isolated git worktree: local/{}...", task_id);
+
+                    match crate::git::graph::spawn_local_agent_worktree(&repo_path, &task_id).await {
+                        Ok(wt_dir) => {
+                            println!("Worktree created at {}.", wt_dir.display());
+                            println!("Launching sub-shell. You can run `claude-code`, `opencode`, etc.");
+                            println!("Type `exit` when done to automatically capture your changes into a patch.\n");
+
+                            // Spawn the interactive shell
+                            let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
+                            let mut child = tokio::process::Command::new(shell)
+                                .current_dir(&wt_dir)
+                                .spawn()
+                                .expect("Failed to spawn interactive shell in worktree");
+
+                            let _ = child.wait().await;
+
+                            println!("\nShell exited. Capturing changes...");
+
+                            // Auto-commit changes in the worktree
+                            let _ = tokio::process::Command::new("git")
+                                .current_dir(&wt_dir)
+                                .args(["add", "."])
+                                .output()
+                                .await;
+
+                            let _ = tokio::process::Command::new("git")
+                                .current_dir(&wt_dir)
+                                .args(["commit", "-m", &format!("Auto-commit from local CLI session {}", task_id)])
+                                .output()
+                                .await;
+
+                            // Cleanup worktree, but leave the branch!
+                            let _ = crate::git::graph::remove_local_agent_worktree(&repo_path, &wt_dir).await;
+
+                            action_log = format!("Captured local session patch into branch local/{}", task_id);
+                        }
+                        Err(e) => {
+                            println!("Error setting up worktree: {}", e);
+                            std::thread::sleep(std::time::Duration::from_secs(3));
+                            action_log = format!("Error spawning local session: {}", e);
+                        }
+                    }
+
+                    // Restore Ratatui State
+                    enable_raw_mode().unwrap();
+                    execute!(
+                        terminal.backend_mut(),
+                        EnterAlternateScreen,
+                        EnableMouseCapture
+                    ).unwrap();
+                    terminal.clear().unwrap();
+                    needs_list_rebuild = true;
+                    is_loading = true;
+
+                    // Trigger a refresh to show the new local branch
+                    let rp_clone = repo_path.clone();
+                    let w_only = workflow_only;
+                    let tx_clone = tx.clone();
+                    tokio::spawn(async move {
+                        let _ = fetch_origin(&rp_clone).await;
+                        if let Ok(fetched) = get_workflow_commits(&rp_clone, w_only).await {
+                            let _ = tx_clone.send(BgTaskResult::CommitsFetched(fetched)).await;
+                        }
+                        if let Ok((local, ai, remote)) = crate::git::graph::get_all_branches(&rp_clone).await {
+                            let _ = tx_clone
+                                .send(BgTaskResult::BranchesFetched(local, ai, remote))
+                                .await;
+                        }
+                    });
                 }
             }
         }
@@ -920,8 +1004,11 @@ where
                             }
                             KeyCode::Char('l') | KeyCode::Char('L') => {
                                 // Trigger Local CLI Worktree action (Task 27/28 architecture hook)
-                                action_log = "Spawning Local CLI in isolated worktree...".to_string();
-                                // This is a placeholder hook for the universal orchestrator logic
+                                action_log = "Dropping to local worktree terminal shell...".to_string();
+                                let tx_clone = tx.clone();
+                                tokio::spawn(async move {
+                                    let _ = tx_clone.send(BgTaskResult::TriggerLocalCliSession).await;
+                                });
                             }
                             KeyCode::Char('n') | KeyCode::Char('N') => {
                                 return Ok(DashboardAction::CreateNewSession);
