@@ -420,3 +420,58 @@ pub async fn checkout_branch(repo_path: &Path, branch_name_or_sha: &str) -> Resu
         Err(anyhow::anyhow!("Checkout failed:\n{}", err))
     }
 }
+
+/// Task 28: Spawns an isolated Git worktree for external local CLI usage.
+/// It creates a new branch, checks it out into a hidden directory,
+/// and returns the path to that isolated worktree sandbox.
+pub async fn spawn_local_agent_worktree(repo_path: &Path, task_id: &str) -> Result<std::path::PathBuf> {
+    let home = dirs::home_dir().context("Could not find home directory")?;
+    let wt_dir = home.join(".config/julesctl/worktrees").join(task_id);
+    let branch_name = format!("local/{}", task_id);
+
+    // 1. Ensure the parent directory exists
+    tokio::fs::create_dir_all(wt_dir.parent().unwrap()).await?;
+
+    // 2. Create the worktree and branch
+    let output = Command::new("git")
+        .current_dir(repo_path)
+        .args([
+            "worktree",
+            "add",
+            "-b",
+            &branch_name,
+            wt_dir.to_string_lossy().as_ref(),
+        ])
+        .output()
+        .await
+        .context("Failed to run git worktree add")?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!("Failed to create isolated worktree:\n{}", err));
+    }
+
+    Ok(wt_dir)
+}
+
+/// Task 28: Cleans up the isolated worktree after the local CLI session completes.
+pub async fn remove_local_agent_worktree(repo_path: &Path, wt_dir: &Path) -> Result<()> {
+    // 1. git worktree remove
+    let output = Command::new("git")
+        .current_dir(repo_path)
+        .args(["worktree", "remove", wt_dir.to_string_lossy().as_ref()])
+        .output()
+        .await
+        .context("Failed to run git worktree remove")?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow::anyhow!("Failed to remove isolated worktree:\n{}", err));
+    }
+
+    // Note: We intentionally do NOT delete the branch here.
+    // The newly created `local/task_id` branch is left behind so that it
+    // appears in the julesctl Visual Patch Stack for review/cherry-picking!
+
+    Ok(())
+}
