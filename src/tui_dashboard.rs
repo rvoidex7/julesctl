@@ -19,6 +19,18 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Terminal,
 };
+
+/// Builds a styled block following the Retrowave aesthetic.
+/// Magenta border, Magenta title background with Black text, no bottom border.
+fn build_styled_block<'a>(title: &'a str, borders: Borders) -> Block<'a> {
+    Block::default()
+        .borders(borders)
+        .border_style(Style::default().fg(Color::Magenta))
+        .title(Span::styled(
+            title,
+            Style::default().fg(Color::Black).bg(Color::Magenta).add_modifier(Modifier::BOLD),
+        ))
+}
 use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -315,19 +327,27 @@ where
         if !commits.is_empty() && commits[selected_idx].sha != current_diff_sha {
             current_diff_sha = commits[selected_idx].sha.clone();
             diff_scroll_offset = 0; // Reset scroll on new commit
-            current_diff = "Loading patch diff...".to_string();
+
+            // Immediately update with the commit metadata before diff loads
+            let c = &commits[selected_idx];
+            current_diff = format!("Commit: {}\nSHA: {}\n\nLoading patch diff...", c.title, c.sha);
+
             is_loading = true;
             needs_list_rebuild = true;
 
             let rp_clone = repo_path.clone();
             let tx_clone = tx.clone();
             let target_sha = current_diff_sha.clone();
+            let title = c.title.clone();
             tokio::spawn(async move {
                 let diff_text = get_commit_diff(&rp_clone, &target_sha)
                     .await
                     .unwrap_or_else(|e| e.to_string());
+
+                let merged_text = format!("Commit: {}\nSHA: {}\n\n{}", title, target_sha, diff_text);
+
                 let _ = tx_clone
-                    .send(BgTaskResult::DiffFetched(target_sha, diff_text))
+                    .send(BgTaskResult::DiffFetched(target_sha, merged_text))
                     .await;
             });
         }
@@ -348,17 +368,16 @@ where
             // Tabs Header
             let tabs = ratatui::widgets::Tabs::new(cached_tab_titles.clone())
                 .select(active_tab)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .title(" Workflows (1..9 / Tab to switch) "),
-                )
+                .block(build_styled_block(
+                    " Workflows (1..9 / Tab to switch) ",
+                    Borders::TOP,
+                ))
                 .highlight_style(
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
                 )
-                .divider(Span::raw("|"));
+                .divider(Span::styled("|", Style::default().fg(Color::DarkGray)));
             f.render_widget(tabs, chunks[0]);
 
             // Adaptive Layout based on screen width for responsive Termux/Desktop support (Task 5)
@@ -381,24 +400,23 @@ where
                 )
                 .split(chunks[1]);
 
+            // Dynamic borders based on layout direction
+            let left_pane_borders = if is_mobile {
+                Borders::TOP
+            } else {
+                Borders::TOP | Borders::RIGHT
+            };
+
+            let right_pane_borders = Borders::TOP;
+
             // Left Panel (Viewer/Navigator)
             if is_branch_view {
                 // Task 7: Branch View using dynamically parsed `gix` output
-                let mut ai_children = Vec::new();
-                for (i, ai_b) in ai_branches.iter().enumerate() {
-                    let icon = if i == ai_branches.len() - 1 { "└─" } else { "├─" };
-                    ai_children.push(TreeItem::new_leaf(ai_b.clone(), format!("  {} {}", icon, ai_b)));
-                }
-
                 let mut tree_items = Vec::new();
 
-                // Add AI Sessions node if present
-                if !ai_children.is_empty() {
-                    tree_items.push(TreeItem::new(
-                        "jules".to_string(),
-                        "🦑 jules/ (AI Sessions)",
-                        ai_children,
-                    ).unwrap());
+                // Add AI Sessions directly without the "jules/ (AI Sessions)" root node
+                for ai_b in &ai_branches {
+                    tree_items.push(TreeItem::new_leaf(ai_b.clone(), format!("🦑 {}", ai_b)));
                 }
 
                 // Add Remote Main tracking
@@ -413,7 +431,10 @@ where
 
                 let tree = Tree::new(&tree_items)
                     .unwrap()
-                    .block(Block::default().borders(Borders::ALL).title(" 🌲 Branch View (Press 'V' to toggle) "))
+                    .block(build_styled_block(
+                        " Branch View (Press 'V' to toggle) ",
+                        left_pane_borders,
+                    ))
                     .highlight_style(Style::default().fg(Color::Black).bg(Color::Yellow));
 
                 f.render_stateful_widget(tree, body_chunks[0], &mut tree_state);
@@ -444,8 +465,8 @@ where
                             };
 
                             let text = format!(
-                                "{} {} [{}] {}",
-                                c.graph_prefix, prefix, c.short_sha, c.title
+                                "{} {} {}",
+                                c.graph_prefix, prefix, c.title
                             );
                             Line::from(vec![Span::styled(text, style)])
                         })
@@ -466,7 +487,7 @@ where
             let list_title = search_header.as_str();
 
                 let list = List::new(cached_list_items.iter().map(|l| ListItem::new(l.clone())).collect::<Vec<_>>())
-                    .block(Block::default().borders(Borders::ALL).title(list_title));
+                    .block(build_styled_block(list_title, left_pane_borders));
                 f.render_stateful_widget(list, body_chunks[0], &mut list_state);
             }
 
@@ -499,9 +520,9 @@ where
 
                 let conflict_view = Paragraph::new(conflict_text).block(
                     Block::default()
-                        .borders(Borders::ALL)
+                        .borders(right_pane_borders)
                         .border_style(Style::default().fg(Color::Red))
-                        .title(" Conflict Resolution Framework "),
+                        .title(Span::styled(" Conflict Resolution Framework ", Style::default().fg(Color::White).bg(Color::Red).add_modifier(Modifier::BOLD))),
                 );
                 f.render_widget(conflict_view, body_chunks[1]);
             } else if settings_modal_active {
@@ -527,19 +548,18 @@ where
 
                 let settings_view = Paragraph::new(settings_text).block(
                     Block::default()
-                        .borders(Borders::ALL)
+                        .borders(right_pane_borders)
                         .border_style(Style::default().fg(Color::Cyan))
-                        .title(" Settings Modal (Press 'S' to close) "),
+                        .title(Span::styled(" Settings Modal (Press 'S' to close) ", Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD))),
                 );
                 f.render_widget(settings_view, body_chunks[1]);
             } else {
                 let diff_view = Paragraph::new(current_diff.as_str())
                     .scroll((diff_scroll_offset, 0))
-                    .block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .title(" Commit Diff / Metadata "),
-                    );
+                    .block(build_styled_block(
+                        " Commit Details ",
+                        right_pane_borders,
+                    ));
                 f.render_widget(diff_view, body_chunks[1]);
             }
 
@@ -547,15 +567,15 @@ where
             let actions_text = vec![
                 Line::from(vec![
                     Span::styled(
-                        " Navigation: Up/Down/j/k ",
+                        " Nav: \u{2191}\u{2193}/j/k ",
                         Style::default().fg(Color::DarkGray),
                     ),
                     Span::raw(" | "),
                     Span::styled(
-                        " [F] Filter View ",
+                        " [F] Filter ",
                         Style::default().fg(Color::White).bg(Color::DarkGray),
                     ),
-                    Span::raw(" | "),
+                    Span::raw(" "),
                     Span::styled(
                         " [A] Apply ",
                         Style::default().fg(Color::Black).bg(Color::LightGreen),
@@ -567,7 +587,17 @@ where
                     ),
                     Span::raw(" "),
                     Span::styled(
-                        " [C] Open Chat ",
+                        " [S] Squash ",
+                        Style::default().fg(Color::Black).bg(Color::Yellow),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        " [D] Drop ",
+                        Style::default().fg(Color::White).bg(Color::Red),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        " [C] Chat ",
                         Style::default().fg(Color::Black).bg(Color::LightBlue),
                     ),
                     Span::raw(" "),
@@ -577,13 +607,23 @@ where
                     ),
                     Span::raw(" "),
                     Span::styled(
-                        " [N] New Session ",
+                        " [N] New ",
                         Style::default().fg(Color::Black).bg(Color::Yellow),
                     ),
                     Span::raw(" "),
                     Span::styled(
-                        " [L] Local CLI (Worktree) ",
+                        " [L] Local CLI ",
                         Style::default().fg(Color::Black).bg(Color::Magenta),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        " [,] Settings ",
+                        Style::default().fg(Color::Black).bg(Color::Gray),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        " [B] Observer ",
+                        Style::default().fg(Color::White).bg(Color::DarkGray),
                     ),
                     Span::raw(" "),
                     Span::styled(
@@ -599,11 +639,16 @@ where
                         Span::styled(" [LOADING...] ", Style::default().fg(Color::Black).bg(Color::Yellow))
                     } else {
                         Span::styled(" [IDLE] ", Style::default().fg(Color::DarkGray))
-                    }
+                    },
+                    Span::raw(" | "),
+                    Span::styled(" Refresh Jules API (59s) ", Style::default().fg(Color::DarkGray)),
                 ]),
             ];
 
-            let footer = Paragraph::new(actions_text).block(Block::default().borders(Borders::ALL));
+            let footer = Paragraph::new(actions_text).block(build_styled_block(
+                " Controls & Status ",
+                Borders::TOP,
+            ));
             f.render_widget(footer, chunks[2]);
         })?;
 
@@ -756,11 +801,15 @@ where
                         match key.code {
                             KeyCode::Char('q') | KeyCode::Esc => return Ok(DashboardAction::Quit),
                             KeyCode::Up | KeyCode::Char('k') => {
-                                while selected_idx > 0 {
-                                    selected_idx -= 1;
-                                    if !commits[selected_idx].sha.is_empty() {
-                                        break;
-                                    } // Skip empty graph lines
+                                if is_branch_view {
+                                    tree_state.key_up();
+                                } else {
+                                    while selected_idx > 0 {
+                                        selected_idx -= 1;
+                                        if !commits[selected_idx].sha.is_empty() {
+                                            break;
+                                        } // Skip empty graph lines
+                                    }
                                 }
                             }
                             KeyCode::Char('g') => {
@@ -778,11 +827,15 @@ where
                                 diff_scroll_offset = diff_scroll_offset.saturating_add(10);
                             }
                             KeyCode::Down | KeyCode::Char('j') => {
-                                while !commits.is_empty() && selected_idx + 1 < commits.len() {
-                                    selected_idx += 1;
-                                    if !commits[selected_idx].sha.is_empty() {
-                                        break;
-                                    } // Skip empty graph lines
+                                if is_branch_view {
+                                    tree_state.key_down();
+                                } else {
+                                    while !commits.is_empty() && selected_idx + 1 < commits.len() {
+                                        selected_idx += 1;
+                                        if !commits[selected_idx].sha.is_empty() {
+                                            break;
+                                        } // Skip empty graph lines
+                                    }
                                 }
                             }
                             KeyCode::Char('/') => {
@@ -829,8 +882,26 @@ where
                                     // Implementation note: would drop terminal context and exec $EDITOR
                                 }
                             }
-                            KeyCode::Char('c') | KeyCode::Char('C') | KeyCode::Enter => {
-                                if !commits.is_empty() {
+                            KeyCode::Enter | KeyCode::Char(' ') => {
+                                if is_branch_view {
+                                    tree_state.toggle_selected();
+                                } else if !commits.is_empty() {
+                                    if let BranchType::JulesSession(ref id) =
+                                        commits[selected_idx].branch_type
+                                    {
+                                        return Ok(DashboardAction::OpenChat(
+                                            id.clone(),
+                                            commits[selected_idx].title.clone(),
+                                        ));
+                                    } else {
+                                        action_log =
+                                            "Can only open Chat on a Jules Session commit (🦑)."
+                                                .to_string();
+                                    }
+                                }
+                            }
+                            KeyCode::Char('c') | KeyCode::Char('C') => {
+                                if !is_branch_view && !commits.is_empty() {
                                     if let BranchType::JulesSession(ref id) =
                                         commits[selected_idx].branch_type
                                     {
