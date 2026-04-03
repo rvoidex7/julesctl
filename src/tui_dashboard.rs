@@ -498,6 +498,11 @@ where
                     ),
                     Span::raw(" "),
                     Span::styled(
+                        " [L] Local CLI (Worktree) ",
+                        Style::default().fg(Color::Black).bg(Color::Magenta),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
                         " [Q] Quit ",
                         Style::default().fg(Color::White).bg(Color::Red),
                     ),
@@ -912,6 +917,11 @@ where
                             }
                             KeyCode::Char('v') | KeyCode::Char('V') => {
                                 is_branch_view = !is_branch_view;
+                            }
+                            KeyCode::Char('l') | KeyCode::Char('L') => {
+                                // Trigger Local CLI Worktree action (Task 27/28 architecture hook)
+                                action_log = "Spawning Local CLI in isolated worktree...".to_string();
+                                // This is a placeholder hook for the universal orchestrator logic
                             }
                             KeyCode::Char('n') | KeyCode::Char('N') => {
                                 return Ok(DashboardAction::CreateNewSession);
