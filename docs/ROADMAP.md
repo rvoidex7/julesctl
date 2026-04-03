@@ -23,6 +23,8 @@ This document acts as an index to the comprehensive architectural manifesto. Eve
     *   [The Visual Patch Stack (Catalog Shopping)](git-workflow/visual-patch-stack.md)
 4.  **Conflict Resolution:**
     *   [The Conflict Resolution Framework](conflict-resolution/framework.md)
+5.  **Universal Local AI Orchestration:**
+    *   [Local CLI Encapsulation via Worktrees](architecture/local-orchestration.md)
 
 ## Execution Plan & Tasks
 
@@ -54,3 +56,5 @@ Based on the architectural manifesto, the following sequential tasks outline the
 - [x] **Task 24:** Implement Tier 2 Conflict Resolution: AI-Assisted Auto-Resolution with structured XML prompt generation and session targeting.
 - [x] **Task 25:** Implement Tier 4 Conflict Resolution: Isolated parallel testing support via `git worktree`.
 - [x] **Task 26:** Implement the Settings & Configuration UI Overlay to manage global config, defaults, AI rules, and sync statuses.
+- [ ] **Task 27:** Implement the Universal AI Git Orchestrator: PTY/Terminal Emulation within Ratatui to host external local CLIs (`claude-code`, `opencode`).
+- [ ] **Task 28:** Implement the Isolated Worktree Encapsulation: Automatically spawn `git worktree` sandboxes for local CLI processes, capture file changes, and convert them to commit patches within the Visual Patch Stack.

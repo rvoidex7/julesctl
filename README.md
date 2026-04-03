@@ -50,6 +50,9 @@ When an AI patch collides with your local code, `julesctl` doesn't just dump you
 ### 5. Cross-Device Syncing via Ahenk
 Transition seamlessly from your Desktop to your phone via Termux. `julesctl` uses P2P [Ahenk](https://github.com/Appaholics/Ahenk) sync to securely transfer your global UI settings, active workflow tabs, and API cache (`~/.config/julesctl/`) across devices, while strictly leaving code synchronization to the native Git protocol.
 
+### 6. Universal AI Git Orchestrator (Agnostic CLI Encapsulation)
+`julesctl` doesn't just manage cloud agents. It serves as the mothership for local 3rd-party coding tools (e.g., `claude-code`, `opencode`). By embedding them within a built-in Pseudo-Terminal (PTY) and redirecting their execution into isolated `git worktree` sandboxes, `julesctl` instantly grants branch management, visual diffing, and conflict resolution capabilities to local tools that natively lack Git awareness, preventing any collision with your primary working branch.
+
 ---
 
 ## 📚 Architectural Manifesto & Documentation
