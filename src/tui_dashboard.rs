@@ -43,6 +43,38 @@ enum BgTaskResult {
     TriggerLocalCliSession,      // Signals the main loop to drop out of ratatui and spawn the CLI
 }
 
+fn get_safe_shell() -> String {
+    #[cfg(unix)]
+    {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        // Basic sanitization: no spaces, no shell metacharacters
+        if shell.is_empty()
+            || shell.contains(' ')
+            || shell.chars().any(|c| ";|&><$()\\'`\"\n\r".contains(c))
+        {
+            "/bin/sh".to_string()
+        } else {
+            shell
+        }
+    }
+    #[cfg(windows)]
+    {
+        let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+        if shell.is_empty()
+            || shell.contains(' ')
+            || shell.chars().any(|c| ";|&><$()\\'`\"\n\r".contains(c))
+        {
+            "cmd.exe".to_string()
+        } else {
+            shell
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        "sh".to_string()
+    }
+}
+
 pub async fn run_dashboard(cfg: &Config, active_tab: usize) -> Result<DashboardAction> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -246,13 +278,19 @@ where
                             println!("Type `exit` when done to automatically capture your changes into a patch.\n");
 
                             // Spawn the interactive shell
-                            let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
-                            let mut child = tokio::process::Command::new(shell)
+                            let shell = get_safe_shell();
+                            match tokio::process::Command::new(&shell)
                                 .current_dir(&wt_dir)
                                 .spawn()
-                                .expect("Failed to spawn interactive shell in worktree");
-
-                            let _ = child.wait().await;
+                            {
+                                Ok(mut child) => {
+                                    let _ = child.wait().await;
+                                }
+                                Err(e) => {
+                                    println!("Failed to spawn interactive shell ({}): {}", shell, e);
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                                }
+                            }
 
                             println!("\nShell exited. Capturing changes...");
 
